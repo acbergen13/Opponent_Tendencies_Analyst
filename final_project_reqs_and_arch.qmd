@@ -44,9 +44,15 @@ Then write a few paragraphs (in prose) explaining what you are trying to accompl
 
 The project we have chosen is 35.4.12 Sports: Opponent Tendencies Analyst from the list of ideas on the Final Project Specifications page.
 
-The goal of this project is to giving a coaching staff or game-prep analyst a single, evidence-backed opponent tendencies report for an upcoming **SPORTS ORG OF OUR CHOSING** game since more often than not, play-by-play data and qualitative context in beat-reporter coverage and coach quotes never merge.
+The goal of this project is to giving a coaching staff or game-prep analyst a single, evidence-backed opponent tendencies report for an upcoming **NFL** game since more often than not, play-by-play data and qualitative context in beat-reporter coverage and coach quotes never merge.
 
-`...`
+What we are trying to accomplish here is a way for a defensive coordinator, an analytics staffer, or a fan-analyst to better prep for an upcoming opponent. Today, the work is done in pieces. They query or eyeball play-by-play data to see what opponents do in certain scenarios (like 3rd and long, 4th down in opponent territory, 1st and goal), then follow up by listening to opposing team post-game press conferences to hopefully catch any insight, and also investigate what other accredited analysts online might be saying. With our solution, we hope to bring a single site where our users can gather all of the important information together and be provided with a user-friendly tendencies report for the upcoming game.
+
+For the scope of the project, we want it to be focused on one opponent per run, regular-season games in the current season, publicly available data and reporting, and a written report with sourced evidence as the deliverable. Some things that would qualify as "Out-of-scope" would be predicting the game outcome or betting lines, in-game real-time use, injury-status guarantees, and recommending game plans. The tool is designed to describe what the opponent tends to do and why that might be changing; it doesn't tell the user what to do.
+
+A successful run for this application follows this. The user selects their opponent from a dropdown of available teams and within a few minutes receives a full report on certain tendencies. There will be a quantitative and a qualitative section providing the user with respective data to their fields like tables or summaries of tendencies or scheme notes and quotes. The numbers should be re-derived from stored data and each quote should be cited for traceability.
+
+This problem needs a multi-agent system rather than a single prompt or script for a couple reasons. First, the data sources are all very different from each other, as the play-by-play data is structured but the articles and transcripts 
 
 ## Requirements
 
