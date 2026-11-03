@@ -42,9 +42,9 @@ Unlike the mid-term, there is no single specification for everyone — so before
 
 Then write a few paragraphs (in prose) explaining what you are trying to accomplish.  Who is the user?  What problem do they have today, and what will they be able to do with your solution that they cannot do now?  What is in scope and — just as important — what is out of scope?  What does a successful run look like?  Finally, make the case for why this problem **needs a multi-agent design** rather than a single prompt or a script.
 
-`The project I have chosen is ... (from the list / approved by the instructor on ...)`
+The project we have chosen is 35.4.12 Sports: Opponent Tendencies Analyst from the list of ideas on the Final Project Specifications page.
 
-`The goal of this project is to ... for ... because hello`
+The goal of this project is to giving a coaching staff or game-prep analyst a single, evidence-backed opponent tendencies report for an upcoming **SPORTS ORG OF OUR CHOSING** game since more often than not, play-by-play data and qualitative context in beat-reporter coverage and coach quotes never merge.
 
 `...`
 
