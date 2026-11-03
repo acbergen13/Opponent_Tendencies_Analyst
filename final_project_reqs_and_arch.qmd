@@ -1,0 +1,97 @@
+---
+title: "Final Project Requirements, Questions and Architecture"
+---
+
+::: {.callout-important appearance="simple"}
+## Start here — download this file
+
+<!-- ?download=1 is load-bearing: without a query string Quarto rewrites a
+     relative .qmd link to the rendered .html, which would hand the student
+     the web page instead of the source. -->
+<a href="final_project_reqs_and_arch.qmd?download=1" download="final_project_reqs_and_arch.qmd" title="Download the .qmd starter file"><img src="../image/qmd_download_final.svg" alt="Download the starter file final_project_reqs_and_arch.qmd" style="width:460px;max-width:100%;height:auto;border:0;"></a>
+
+**Do not start from a blank page.** The page you are reading *is* the assignment, and the `.qmd` behind it is your template — every section below is a prompt for you to fill in.
+
+1. Click the button above to download **`final_project_reqs_and_arch.qmd`**.
+2. Rename it with your PID, e.g. `final_reqs_and_arch_<pid>.qmd`.
+3. Add `format: pdf` to the YAML header, and delete this callout.
+4. Work top to bottom, replacing the placeholder lines (the ones shown `like this`) with your own answers. Keep the section headings — they are the grading structure.
+5. Render it: `quarto render final_reqs_and_arch_<pid>.qmd`.
+6. Turn in **both** the `.qmd` and the rendered `.pdf`.
+:::
+
+## Final Project Definition
+
+The project you are designing here is **your** final project — either one of the ideas on the **[Final Project Specifications](../projects/final_project.qmd)** page, or a project idea the instructor has approved. Read that page end to end (overview, required showcase sections, rubric, and the idea you picked) before you start this exercise.
+
+## Assignment Overview
+
+Anyone can build an agentic system with Claude Code or Open Code.  _Can you build one that is reliable, safe, cost effective and meets all the requirements every time it's run?_  It's time to put on your AI architect hat and address LLM/RAG shortcomings with a good agentic AI design.
+
+## Rubric
+
+This is a 500 point exercise.  It's an assessment of how much you have learned up to this point.  Please take it seriously.  It's as important as the project output.  You should complete this Quarto markdown file (.qmd) and turn it in along (as .qmd) with a quarto rendered PDF version (.pdf).  Add `format: pdf` to the yaml header of this file and then run `quarto render yourfilename.qmd` to build the PDF.
+
+## Important Note
+
+This work must be done 100% without assistance from any AI.  I need to know that *YOU* have learned the material. I know that Claude knows it.  **Any use of AI will be easily detected and will be treated as an Honor Code violation.  Please take this seriously.**
+
+## Introduction
+
+Unlike the mid-term, there is no single specification for everyone — so before you list requirements, tell me what you are building.  Name the project you chose: one of the ideas on the [Final Project Specifications](../projects/final_project.qmd) page, **or** a project the instructor has approved (say so, and when it was approved).
+
+Then write a few paragraphs (in prose) explaining what you are trying to accomplish.  Who is the user?  What problem do they have today, and what will they be able to do with your solution that they cannot do now?  What is in scope and — just as important — what is out of scope?  What does a successful run look like?  Finally, make the case for why this problem **needs a multi-agent design** rather than a single prompt or a script.
+
+`The project I have chosen is ... (from the list / approved by the instructor on ...)`
+
+`The goal of this project is to ... for ... because ...`
+
+`...`
+
+## Requirements
+
+List the requirements for **your** project, based on the [Final Project Specifications](../projects/final_project.qmd) (the overview, required showcase sections, rubric, and the description of the idea you chose — or your instructor-approved proposal) and on the design you are proposing in your Introduction.  List as many as you can (20 is not meaningful here). This is a critical step!  Any person or LLM should be able to fully understand **all** requirements for the application from this list.
+
+Number every requirement — the later sections refer back to them by number.
+
+`1. The solution should ...`
+
+`2. The solution should ...`
+
+`...`
+
+## LLM / RAG Issues
+
+Referring back to the lectures on LLM and RAG — and, now that you have seen them, on multi-agent systems and anti-patterns — what are the specific issues that you must overcome with good agentic AI design/architecture/patterns **to meet the requirements**?  **Make sure you point back to a specific requirement**.  Don't solve the issue yet. Just identify it.  You should have a fair number of these (between 5 and 20).
+
+`1. For requirement 3, the specific LLM issue that needs to be addressed is ...`
+
+`...`
+
+## Basic  Architecture
+
+Write up a couple of paragraphs (in prose) on how you plan to design the solution.  What will be the general approach.  Don't solve the issues yet... just general approach.  What are the major pieces, how do they connect, etc.?
+
+**25 Bonus points for including a UML sequence diagram using a mermaid diagram.  **For this syntax (and only this syntax), I will allow LLM usage** but you need to prompt the LLM with the sequence diagram flow, actors and steps.  Include your prompt here.**
+
+`The solution will be architected as ... using ...`
+
+
+You should end your `Basic Architecture` with the level of agency you think is **earned** by this solution architecture.  Go back to the beginning of the course for the various levels.  **Make sure you give a quick summary of why it is earned.**
+
+`The level of agency earned by this solution architecture is ... briefly here is why ...`
+
+`...`
+
+## Solution Mitigation
+
+Now for each of the LLM/RAG issues, you should give specific design patterns that we learned in class to address them.  I need a short explanation of why your solution is the right one.  **Make sure you refer back to the numbered issue from the previous section.**
+
+`1. For issue 5, the design pattern that addresses this issue is ...  here's why I think it is the best choice.`
+
+`...`
+
+
+## Final Thoughts
+
+Just like the mid-term, this exercise is something you do before invoking an agentic harness.  This is where you add value and earn your place in the future AI ecosystem.  Next steps we will review this architecture with a frontier level model and refine it.  Then we work with an agentic harness to build it!
