@@ -44,7 +44,7 @@ Then write a few paragraphs (in prose) explaining what you are trying to accompl
 
 `The project I have chosen is ... (from the list / approved by the instructor on ...)`
 
-`The goal of this project is to ... for ... because ...`
+`The goal of this project is to ... for ... because hello`
 
 `...`
 
