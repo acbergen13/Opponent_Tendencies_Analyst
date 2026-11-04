@@ -60,11 +60,65 @@ List the requirements for **your** project, based on the [Final Project Specific
 
 Number every requirement — the later sections refer back to them by number.
 
-`1. The solution should ...`
+1. The solution should provide a user-friendly user interface in Python Streamlit.
 
-`2. The solution should ...`
+2. The solution should get NFL play-by-play data for the 2026 season from nflverse and store it in a local JSON database.
 
-`...`
+3. The user should be able to refresh and update the local database with the latest and most up-to-date 2026 season from nflverse. It should not create duplicates by using the game ID and play ID.
+
+4. The solution should let you select an opponent from a dropdown of all NFL teams in alphabetical order. Also, it should let you choose which regular season weeks the user wishes to include. Preseason, future weeks, and postseason should not be included.
+
+5. The solution should show the important information such as the opponent, games included, date, scores, and data used, so that it is easy to understand.
+
+6. The solution should retrieve only relevant written beat-reporter articles, film breakdowns, and post-game coach quotes for the selected teams.
+
+7. The solution should store articles, breakdowns, coach quotes, and any relevant metadata like author, publisher, date, link, and the game it refers to, in a database for later use or retrieval.
+
+8. A vector RAG index should be created for the articles, breakdowns, and coach quotes using ChromaDB so the system can retrieve evidence for each opponent. The index should be saved for reuse and only rebuilt when the source data changes. The same embedding model should be used for indexing and searching.
+
+9. After selecting an opponent, the user should be able to click a button to build an opponent tendencies report backed by evidence.
+
+10. The solution should use 4 agents. One for analyzing play-by-play statistics, another for reviewing beat-reporter coverage and film breakdowns, another for checking coach quotes, and the last one for combining all their findings. The first three agents should work at the same time using the same opponent and weeks.
+
+11. The statistics agent should use Python tools to calculate the opponent’s tendencies such as the run rate, pass rates, yards per play, and third-down conversion rates. It should compare situations based on down, yards needed for a first down, and field position.  It should be consistent and show the number of plays included.
+
+12. The beat-reporter agent should retrieve only relevant articles and written film breakdowns within this season of football. It should get it only from known sports sites and trusted reporters and analysts. It should find opponent tendencies, formations, play calling, and recent changes. All findings should be supported.
+
+13. The coach-quote agent should retrieve only relevant post-game statements from coaches of the selected team within this season of football. It should look for explanations of the coaches' approach, adjustments, and performance. Direct quotes should keep the same wording and back it up with which coach said it, the date, and the source.
+
+14. The synthesis agent should combine all 3 of the agents’ findings into one report. It should explain where the information agrees, disagrees, and what’s missing. Its format should be clear, easy to understand, and consistent.
+
+15. A coach’s words should not be treated as proof of actual tendencies. It should identify changes in the opponent’s tendencies when enough data is available. It should show which games or weeks are being compared.
+
+16. The solution should show a written report with quantitative and qualitative sections. The quantitative section should include tables or summaries of tendencies. The qualitative section should include scheme notes, reporting, and coach quotes.
+
+17. The solution should allow the user to follow up on the initial report by asking about a particular situation, requesting supporting evidence, or asking for an explanation. The selected opponent, games, report, and evidence should be kept in session state between turns.
+
+18. The solution should optimize the original prompt using LLM prompt optimization. The rewritten prompt should keep all important information.
+
+19. The solution should verify all facts presented through direct grounding in the source materials. The user should be able to trace back factual claims to the original source material text or the stored information.
+
+20. The solution should be highly reliable. Running the same prompt over again with the same data should generate relatively consistent results. If the results are wildly different, the solution is a complete failure and will never be accepted.
+
+21. The solution should validate data responses and retrieval results before allowing the model to use them as evidence. Also, code should check that every game, play, article, and quote exists in the source data.
+
+22. The solution should clearly report no results, invalid responses, or failed tool calls instead of making up missing information. If relevant articles, breakdowns, or coach quotes are unavailable, what is missing should be reported as a warning. It should continue with whatever supported information is available.
+
+23. The solution should treat retrieved information as data, not as instructions for the model to follow.
+
+24. The solution should use deterministic code for calculations, sorting, filtering, and comparing opponent statistics instead of asking the LLM. Also, Python code should check for duplicate plays and missing values. If missing data affecting calculations exists, it should explain and not make up a value.
+
+25. The solution should return each agent’s findings in a consistent structured format using Pydantic. Each agent's output has to include the opponent, games, weeks chosen, tendencies, observations, supporting evidence, and limitations.
+
+26. The solution should make sure sources line up with the opponent and weeks chosen. Reporting from earlier in the 2026 season can be labeled as background, but shouldn’t be evidence of tendencies for the weeks chosen. Reporting from previous seasons should not be used at all.
+
+27. The solution should flag it or ask for human review when the available evidence is too weak to support the opponent's tendencies claim. Things like small samples or missing sources should be reported.
+
+28. The solution should make sure to focus on describing what the opponent tends to do. Predicting game outcomes or betting lines, in-game real-time use, injury-status guarantees, and recommending game plans are out of scope.
+
+29. The chatbot and agents should use an LLM through the VT ARC OpenAI-compatible endpoint. Each agent should have a narrow-focused constitutional prompt that states its objective and rules to follow.
+
+30. The solution should produce a report within a few minutes by using stored data. It should show its progress as the app runs and limit tool call retries. It should report a timeout or failure instead of continuing and explain what happened.
 
 ## LLM / RAG Issues
 
