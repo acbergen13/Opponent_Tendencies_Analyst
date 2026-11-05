@@ -174,6 +174,8 @@ Now for each of the LLM/RAG issues, you should give specific design patterns tha
 9. For issue 9, the design patterns that address context rot are externalization and summarization. The opponent, game, report, and evidence should stay in session state, and be put back into each prompt. Older turns can be summarized in order to shed tokens and keep only the information needed. This is done so important details don’t get lost in the conversation.
 10. For issue 10, the design pattern that addresses prompt injection is defense in depth. Use instruction hierarchy, delimiters, and provenance labels to make sure data is treated as information rather than instructions. Tool allowlists and schema validation add extra protection. No single guardrail can stop every prompt injection, so using multiple in defense in depth is the best option.
 
+14. For issue 14, the design patterns that address invalid formats are structured outputs and schema validation. Each agent should return all information using a JSON schema. Pydantic should validate the results. If it does not meet this required format allow a fix to be requested. This is more dependable than asking for a format in the prompt because it doesn’t mean it’ll necessarily follow it the same every time.
+15. For issue 15, the design approach that addresses prompt sensitivity is a prompt template with systematic prompt evaluation. Test prompt changes on a small sample of opponents and check if they meet the goals and retrieve evidence that is relevant. Then keep changes only if they improve the results. This is better than accepting a rewrite just because it sounds right or detailed.
 
 
 ## Final Thoughts
