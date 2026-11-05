@@ -150,10 +150,9 @@ Write up a couple of paragraphs (in prose) on how you plan to design the solutio
 
 **25 Bonus points for including a UML sequence diagram using a mermaid diagram.  **For this syntax (and only this syntax), I will allow LLM usage** but you need to prompt the LLM with the sequence diagram flow, actors and steps.  Include your prompt here.**
 
-`The solution will be architected as ... using ...`
-
-
 You should end your `Basic Architecture` with the level of agency you think is **earned** by this solution architecture.  Go back to the beginning of the course for the various levels.  **Make sure you give a quick summary of why it is earned.**
+
+The solution will be architected as a pipeline with four layers: data, validation, agents, and interface. The data layer has two halves. Structured play-by-play data for the current season is pulled from nflverse into a local JSON store, keyed by game ID and play ID so refreshes never create duplicates. Unstructured media data is collected from known sports sources and stored with its metadata (author, publisher, date, reference game). That text is also embedded into a persistent ChromaDB index, so the retrieval agents can pull evidence for the selected opponent and weeks. Between the data layer and the agents sits a validation layer in plain Python. It checks that games, plays, articles, and quotes actually exist in the stored sources, screens for duplicates and missing values, and confirms that sources line up with the chosen opponent and weeks before anything reaches a model. Retrieved text is passed to the agents as quoted data, never as instructions. 
 
 `The level of agency earned by this solution architecture is ... briefly here is why ...`
 
