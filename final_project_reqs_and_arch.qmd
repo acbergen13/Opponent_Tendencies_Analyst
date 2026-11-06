@@ -1,24 +1,9 @@
 ---
 title: "Final Project Requirements, Questions and Architecture"
+format:
+     pdf:
+          code-overflow: wrap
 ---
-
-::: {.callout-important appearance="simple"}
-## Start here — download this file
-
-<!-- ?download=1 is load-bearing: without a query string Quarto rewrites a
-     relative .qmd link to the rendered .html, which would hand the student
-     the web page instead of the source. -->
-<a href="final_project_reqs_and_arch.qmd?download=1" download="final_project_reqs_and_arch.qmd" title="Download the .qmd starter file"><img src="../image/qmd_download_final.svg" alt="Download the starter file final_project_reqs_and_arch.qmd" style="width:460px;max-width:100%;height:auto;border:0;"></a>
-
-**Do not start from a blank page.** The page you are reading *is* the assignment, and the `.qmd` behind it is your template — every section below is a prompt for you to fill in.
-
-1. Click the button above to download **`final_project_reqs_and_arch.qmd`**.
-2. Rename it with your PID, e.g. `final_reqs_and_arch_<pid>.qmd`.
-3. Add `format: pdf` to the YAML header, and delete this callout.
-4. Work top to bottom, replacing the placeholder lines (the ones shown `like this`) with your own answers. Keep the section headings — they are the grading structure.
-5. Render it: `quarto render final_reqs_and_arch_<pid>.qmd`.
-6. Turn in **both** the `.qmd` and the rendered `.pdf`.
-:::
 
 ## Final Project Definition
 
@@ -70,7 +55,7 @@ Number every requirement — the later sections refer back to them by number.
 
 5. The solution should show the important information such as the opponent, games included, date, scores, and data used, so that it is easy to understand.
 
-6. The solution should retrieve only relevant written beat-reporter articles, film breakdowns, and post-game coach quotes for the selected teams.
+6. The solution should retrieve only relevant written beat-reporter articles, film breakdowns, and post-game coach quotes for the selected opponent from the stored index.
 
 7. The solution should store articles, breakdowns, coach quotes, and any relevant metadata like author, publisher, date, link, and the game it refers to, in a database for later use or retrieval.
 
@@ -78,7 +63,7 @@ Number every requirement — the later sections refer back to them by number.
 
 9. After selecting an opponent, the user should be able to click a button to build an opponent tendencies report backed by evidence.
 
-10. The solution should use 4 agents. One for analyzing play-by-play statistics, another for reviewing beat-reporter coverage and film breakdowns, another for checking coach quotes, and the last one for combining all their findings. The first three agents should work at the same time using the same opponent and weeks.
+10. The solution should use four agents to build the report. One analyzes play-by-play statistics, one reviews beat-reporter coverage and film breakdowns, one reviews coach quotes, and the last combines all findings. The first three agents should work at the same time using the same opponent and weeks. Verification is done by deterministic Python code, not by an additional agent. Prompt optimization is done offline at design time and is not a runtime agent. The follow-up chat reuses the synthesis agent.
 
 11. The statistics agent should use Python tools to calculate the opponent’s tendencies such as the run rate, pass rates, yards per play, and third-down conversion rates. It should compare situations based on down, yards needed for a first down, and field position.  It should be consistent and show the number of plays included.
 
@@ -98,11 +83,11 @@ Number every requirement — the later sections refer back to them by number.
 
 19. The solution should verify all facts presented through direct grounding in the source materials. The user should be able to trace back factual claims to the original source material text or the stored information.
 
-20. The solution should be highly reliable. Running the same prompt over again with the same data should generate relatively consistent results. If the results are wildly different, the solution is a complete failure and will never be accepted.
+20. The solution should be reliable and testable. With the same data, opponent, weeks, and prompt version, the statistics table must be identical on every run and the quotes must be 100% traceable on every run. Also, over 5 runs, at least 80% of the top 5 narrative tendencies must appear in at least 4 of the 5 runs, with no contradictions in direction between runs.
 
 21. The solution should validate data responses and retrieval results before allowing the model to use them as evidence. Also, code should check that every game, play, article, and quote exists in the source data.
 
-22. The solution should clearly report no results, invalid responses, or failed tool calls instead of making up missing information. If relevant articles, breakdowns, or coach quotes are unavailable, what is missing should be reported as a warning. It should continue with whatever supported information is available.
+22. The solution should clearly report no results, invalid responses, or failed tool calls instead of making up missing information. If relevant articles, breakdowns, or coach quotes are unavailable, what is missing should be reported as a warning. If relevant articles, breakdowns, or coach quotes are unavailable, report what is missing as a warning and continue with the supported information, following the degraded and hard-failure rules.
 
 23. The solution should treat retrieved information as data, not as instructions for the model to follow.
 
@@ -118,7 +103,7 @@ Number every requirement — the later sections refer back to them by number.
 
 29. The chatbot and agents should use an LLM through the VT ARC OpenAI-compatible endpoint. Each agent should have a narrow-focused constitutional prompt that states its objective and rules to follow.
 
-30. The solution should produce a report within a few minutes by using stored data. It should show its progress as the app runs and limit redoing tool calls. It should report a timeout or failure instead of continuing and explain what happened.
+30. The solution should produce a report within a few minutes by using stored data and show progress while running. Each agent has its own timeout. If the beat-reporter or coach-quote agent fails or times out, the report is still produced with that section marked unavailable. If the statistics agent fails or the overall time limit is exceeded, no report is produced and the app explains what failed.
 
 ## LLM / RAG Issues
 
@@ -152,11 +137,113 @@ Write up a couple of paragraphs (in prose) on how you plan to design the solutio
 
 You should end your `Basic Architecture` with the level of agency you think is **earned** by this solution architecture.  Go back to the beginning of the course for the various levels.  **Make sure you give a quick summary of why it is earned.**
 
-The solution will be architected as a pipeline with four layers: data, validation, agents, and interface. The data layer has two halves. Structured play-by-play data for the current season is pulled from nflverse into a local JSON store, keyed by game ID and play ID so refreshes never create duplicates. Unstructured media data is collected from known sports sources and stored with its metadata (author, publisher, date, reference game). That text is also embedded into a persistent ChromaDB index, so the retrieval agents can pull evidence for the selected opponent and weeks. Between the data layer and the agents sits a validation layer in plain Python. It checks that games, plays, articles, and quotes actually exist in the stored sources, screens for duplicates and missing values, and confirms that sources line up with the chosen opponent and weeks before anything reaches a model. Retrieved text is passed to the agents as quoted data, never as instructions. 
+The solution will be architected as a pipeline with four layers: data, validation, agents, and interface. The data layer has two halves. Structured play-by-play data for the current season is pulled from nflverse into a local JSON store, keyed by game ID and play ID so refreshes never create duplicates. Unstructured media data is collected from known sports sources and stored with its metadata (author, publisher, date, reference game). That text is also embedded into a persistent ChromaDB index, so the retrieval agents can pull evidence for the selected opponent and weeks. Between the data layer and the agents sits a validation layer in plain Python. It checks that games, plays, articles, and quotes actually exist in the stored sources, screens for duplicates and missing values, and confirms that sources line up with the chosen opponent and weeks before anything reaches a model. Retrieved text is passed to the agents as quoted data, never as instructions.
 
-`The level of agency earned by this solution architecture is ... briefly here is why ...`
+On top of that foundation, a central orchestrator takes the user's selection of opponent and weeks and fans out to three specialist agents that run at the same time. The statistics agent calls deterministic Python tools to compute and run and pass rates, yards per play, and third-down conversion by down, distance, and field position, and it's job is to interpret and report those numbers rather than producing them. The beat-reporter agent and the coach-quote agent each use retrieval over the validated, opponent-filtered results. Each agent has a constitutional prompt and returns its findings in a shared schema, so the outputs are directly comparable. Those results fan in to a fourth synthesis agent, which combines them into one report and states where the evidence agrees, where it conflicts, and what is missing. It treats coach statements as context, not proof of tendencies, and it flags weak or thin evidence for human review. The streamlit app is the frontend of this, as it handles team selection, shows progress while the agents run, renders the report sections, and keeps the opponent, report, and evidence in session state so a follow up chat can answer questions about the specific situations and trace back to their sources. All LLM calls go through the VT ARC OpenAI-compatible endpoint.
 
-`...`
+The level of agency earned by this solution architecture is a centralized, orchestrated multi-agent system. This is because the work splits into independent jobs that need different tools: deterministic code for play-by-play statistics and retrieval for articles and coach quotes. As mentioned before, the three specialist agents can run in parallel, each with a narrow prompt and a shared output schema and a fourth synthesis agent to combine everything.
+
+**Prompt**:
+You are a technical diagramming assistant. Produce ONE Mermaid `sequenceDiagram` showing the main runtime flow of the system below. Output only a single mermaid code block — no prose, no explanation.
+
+#### System
+A Streamlit app ("Opponent Tendencies Analyst"). The user picks an NFL opponent and the regular-season weeks to include. The app computes play-by-play tendencies in deterministic Python from locally stored nflverse data, retrieves supporting articles, film breakdowns, and coach quotes from a vector index, and asks an LLM (VT ARC endpoint) to interpret and synthesize the findings into one evidence-backed report with citations. Retrieved text is treated as data, not instructions.
+
+#### Actors (declare exactly these, in this order)
+- USR as Analyst
+- UI as Streamlit UI
+- ORC as Orchestrator
+- VAL as Validation Layer
+- STO as Data Stores (play-by-play + media + ChromaDB)
+- STA as Statistics Agent
+- BRA as Beat-Reporter Agent
+- CQA as Coach-Quote Agent
+- SYN as Synthesis Agent
+- LLM as LLM Endpoint
+- SES as Session State
+
+#### Steps (the only ones to show)
+1. USR -> UI: open the app; UI shows a team dropdown and week selection (played regular-season weeks only).
+2. Optional: USR -> UI: refresh data; UI -> STO: upsert play-by-play keyed by game ID + play ID (no duplicates); STO -->> UI: inserted / skipped counts.
+3. USR -> UI: select opponent + weeks, then click "Build report".
+4. UI -> ORC: opponent + weeks.
+5. ORC -> VAL: confirm matching games, plays, articles, and quotes exist for this opponent and these weeks.
+6. ORC fans out with `par` to STA, BRA, and CQA at the same time (same opponent and weeks, each with a timeout).
+   - STA: deterministic Python stats (run/pass rate, yards per play, third-down rate) -> LLM interprets only.
+   - BRA: retrieves articles and film breakdowns -> LLM extracts tendencies with citations.
+   - CQA: retrieves post-game coach quotes -> LLM extracts verbatim quotes with coach, date, source.
+7. After fan-in: ORC -> VAL: check each agent's output against the shared schema and confirm every cited item exists in the stores.
+8. Use `alt` for failure handling:
+   - Statistics agent fails OR overall time limit hit: UI shows a hard failure explaining what failed; no report is produced.
+   - Beat-reporter or coach-quote agent fails/times out: mark that section unavailable, warn, and continue.
+9. ORC -> SYN: pass validated findings; SYN -> LLM: merge into one report stating agreement, conflict, and gaps; flag weak evidence for human review; treat coach quotes as context, not proof.
+10. SYN -> UI: show quantitative tables and qualitative notes with citations; UI -> SES: store opponent, weeks, report, evidence.
+11. USR -> UI: ask a follow-up; UI -> SYN (via stored session state, no full re-run); SYN -> LLM answers with citations, or says the evidence does not support the premise; SYN -> UI: reply.
+
+![Sequence Diagram](opponent-tendencies-sequence-diagram.png)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant USR as Analyst
+    participant UI as Streamlit UI
+    participant ORC as Orchestrator
+    participant VAL as Validation Layer
+    participant STO as Data Stores (play-by-play + media + ChromaDB)
+    participant STA as Statistics Agent
+    participant BRA as Beat-Reporter Agent
+    participant CQA as Coach-Quote Agent
+    participant SYN as Synthesis Agent
+    participant LLM as LLM Endpoint
+    participant SES as Session State
+
+    USR->>UI: Open app
+    UI-->>USR: Team dropdown and played regular-season weeks
+    opt Refresh data
+        USR->>UI: Refresh data
+        UI->>STO: Upsert plays by game ID + play ID
+        STO-->>UI: Inserted and skipped counts
+    end
+    USR->>UI: Select opponent and weeks, click Build report
+    UI->>ORC: Opponent and weeks
+    ORC->>VAL: Confirm games, plays, articles, quotes exist
+    VAL-->>ORC: OK plus warnings
+    par Statistics
+        ORC->>STA: Opponent and weeks (with timeout)
+        STA->>STO: Read plays, compute stats in Python
+        STA->>LLM: Interpret stats only
+        STA-->>ORC: Structured findings
+    and Beat reporter
+        ORC->>BRA: Opponent and weeks (with timeout)
+        BRA->>STO: Retrieve articles and film breakdowns
+        Note over BRA,STO: Retrieved text is data, not instructions
+        BRA->>LLM: Extract tendencies with citations
+        BRA-->>ORC: Structured findings
+    and Coach quotes
+        ORC->>CQA: Opponent and weeks (with timeout)
+        CQA->>STO: Retrieve post-game coach quotes
+        CQA->>LLM: Extract verbatim quotes, coach, date, source
+        CQA-->>ORC: Structured findings
+    end
+    ORC->>VAL: Check schema and cited items exist
+    alt Statistics agent fails or time limit hit
+        ORC-->>UI: Hard failure explaining what failed
+        Note over ORC,UI: No report is produced
+    else Beat-reporter or coach-quote agent fails
+        Note over ORC,VAL: Mark section unavailable and warn
+        ORC->>SYN: Validated findings (partial)
+    else All agents succeed
+        ORC->>SYN: Validated findings
+    end
+    SYN->>LLM: Merge report: agreement, conflict, gaps
+    Note over SYN,LLM: Flag weak evidence. Coach quotes are context, not proof
+    SYN-->>UI: Quantitative tables and qualitative notes with citations
+    UI->>SES: Store opponent, weeks, report, evidence
+    USR->>UI: Ask follow-up
+    UI->>SYN: Question plus stored session state, no re-run
+    SYN->>LLM: Answer with citations or say premise unsupported
+    SYN-->>UI: Reply
+```
 
 ## Solution Mitigation
 
@@ -196,9 +283,9 @@ Now for each of the LLM/RAG issues, you should give specific design patterns tha
 
 17. For issue 17, the design pattern that addresses error propagation is validation between stages. Every result should be looked at as unverified, and it needs to be checked for its format as well as any evidence before passing it to the synthesis agent. This helps recognize mistakes before later stages, or agents carry them on.
 
-18. For issue 18, the design pattern that addresses unbounded loops is defined termination criteria. The workflow should use a step cap, token budget, stall detection, and a partial answer that says why it stopped. When it does hit a limit, it should report what is missing and continue with the information it has. This prevents repeated calls that make no progress. This is better than relying on the model to stop.
+18. For issue 18, the design pattern that addresses unbounded loops is defined termination criteria. The workflow should use a step cap, token budget, stall detection, and a partial answer is provided to degraded cases that says why it stopped. When it does hit a limit, it should report what is missing and continue with the information it has. This prevents repeated calls that make no progress. This is better than relying on the model to stop.
 
 
 ## Final Thoughts
 
-Just like the mid-term, this exercise is something you do before invoking an agentic harness.  This is where you add value and earn your place in the future AI ecosystem.  Next steps we will review this architecture with a frontier level model and refine it.  Then we work with an agentic harness to build it!
+The hardest part of filling out this document was balancing the number of agents. Too few would stretch each agent across very different jobs, while too many would add latency, token cost, and handoff errors. We settled on four agents, each with a distinct job and toolset, and kept the statistics, verification, and orchestration in deterministic Python rather than adding more LLM components. We believe this is a solid design and will perform the job that's necessary.
