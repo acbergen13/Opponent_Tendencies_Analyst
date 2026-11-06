@@ -118,7 +118,7 @@ Number every requirement — the later sections refer back to them by number.
 
 29. The chatbot and agents should use an LLM through the VT ARC OpenAI-compatible endpoint. Each agent should have a narrow-focused constitutional prompt that states its objective and rules to follow.
 
-30. The solution should produce a report within a few minutes by using stored data. It should show its progress as the app runs and limit tool call retries. It should report a timeout or failure instead of continuing and explain what happened.
+30. The solution should produce a report within a few minutes by using stored data. It should show its progress as the app runs and limit redoing tool calls. It should report a timeout or failure instead of continuing and explain what happened.
 
 ## LLM / RAG Issues
 
@@ -163,18 +163,40 @@ The solution will be architected as a pipeline with four layers: data, validatio
 Now for each of the LLM/RAG issues, you should give specific design patterns that we learned in class to address them.  I need a short explanation of why your solution is the right one.  **Make sure you refer back to the numbered issue from the previous section.**
 
 1. For issue 1, the design pattern that addresses this issue is tool use. Workflow code calls tools to retrieve nflverse data, articles, film breakdowns, and coach quotes and returns the results to the agents. Since the model does not have to access the outside system, the tools allow it to act and reach the outside system, fixing the issue.
-2. For issue 2, the design pattern that addresses frozen knowledge is grounding through retrieval. Tools update the stored 2026 NFL data and reporting to get the current information. Also, RAG retrieves the relevant passages. This is better than using training data because the sources can be updated during the season.
-3. For issue 3, the design patterns that address hallucination are grounding through RAG and Chain-of-verification. RAG directly retrieves statistics, articles, and quotes. Chain-of-verification checks them separately against their sources. This checks with evidence that can be backed up instead of just telling the model not to hallucinate.
-4. For issue 4, the design pattern that addresses this issue is structured output. Using the same format and a low temperature helps keep the agents and the final reports consistent. Low temperature does not ensure consistent results, so it should be tested using the same information.
-5. For issue 5, the design pattern that addresses this issue is tool use with Python calculations because it is deterministic. Python does the math and the LLM explains the results. This is more reliable because LLMs are bad at math and code can do the same calculations each time.
-6. For issue 6, the design pattern is grounding through retrieval. There should be tests with different strategies of chunk sizes and overlap. Then check what the retriever returns and ask whether it has what it needs. This is better than using one chunk size without checking because information can get missed.
-7. For issue 7, the design pattern that addresses this issue is retrieval with metadata filtering. ChromaDB should filter passages by opponent, year, and chosen weeks. This is better than similarity because the information in it could refer to the wrong team or dates.
-8. For issue 8, the design patterns that address lost-in-the-middle are externalization and retrieval. The system should pin the opponent, weeks, and goal near the top of the context, and store the longer data or information outside of it. Also, it should only retrieve the relevant information. This is a lot better than putting every article or play into a long prompt. It makes important information easier to find.
-9. For issue 9, the design patterns that address context rot are externalization and summarization. The opponent, game, report, and evidence should stay in session state, and be put back into each prompt. Older turns can be summarized in order to shed tokens and keep only the information needed. This is done so important details don’t get lost in the conversation.
-10. For issue 10, the design pattern that addresses prompt injection is defense in depth. Use instruction hierarchy, delimiters, and provenance labels to make sure data is treated as information rather than instructions. Tool allowlists and schema validation add extra protection. No single guardrail can stop every prompt injection, so using multiple in defense in depth is the best option.
 
-14. For issue 14, the design patterns that address invalid formats are structured outputs and schema validation. Each agent should return all information using a JSON schema. Pydantic should validate the results. If it does not meet this required format allow a fix to be requested. This is more dependable than asking for a format in the prompt because it doesn’t mean it’ll necessarily follow it the same every time.
-15. For issue 15, the design approach that addresses prompt sensitivity is a prompt template with systematic prompt evaluation. Test prompt changes on a small sample of opponents and check if they meet the goals and retrieve evidence that is relevant. Then keep changes only if they improve the results. This is better than accepting a rewrite just because it sounds right or detailed.
+2. For issue 2, the design pattern that addresses frozen knowledge is grounding through retrieval. Tools update the stored 2026 NFL data and reporting to get the current information. Also, RAG retrieves the relevant passages. This is better than using training data because the sources can be updated during the season.
+
+3. For issue 3, the design patterns that address hallucination are grounding through RAG and Chain-of-verification. RAG directly retrieves articles and quotes. Python gets the calculated statistics. Chain-of-verification checks them separately against their sources. This checks with evidence that can be backed up instead of just telling the model not to hallucinate. Claims built on small weak evidence should be flagged for human review.
+
+4. For issue 4, the design pattern that addresses this issue is structured output. Using the same format and a low temperature helps keep the agents and the final reports consistent. Low temperature does not ensure consistent results, so repeated runs should be tested using the same information. It should compare the tendencies and format returned.
+
+5. For issue 5, the design pattern that addresses this issue is tool use with Python calculations because it is deterministic. Python does the math, and the LLM explains the results. This is more reliable because LLMs are bad at math, and code can do the same calculations each time.
+
+6. For issue 6, the design pattern that addresses poor chunking is grounding through retrieval. There should be tests with different strategies of chunk sizes and overlap. Then check what the retriever returns and ask whether it has what it needs. This is better than using one chunk size without checking because information can get missed.
+
+7. For issue 7, the design pattern that addresses semantic similarity is retrieval with metadata filtering. ChromaDB should filter passages by opponent, year, and chosen weeks. The agent should check if passages support the tendencies in the report. This is better than similarity because the information in it could refer to the wrong team or dates.
+
+8. For issue 8, the design patterns that address lost-in-the-middle are externalization and retrieval. The system should pin the opponent, weeks, and goal near the top of the context, and store the longer data or information outside of it. Also, it should only retrieve the relevant information. This is a lot better than putting every article or play into a long prompt. It makes important information easier to find.
+
+9. For issue 9, the design patterns that address context rot are externalization and summarization. The opponent, game, report, and evidence should stay in session state and be put back into each prompt. Older turns can be summarized in order to shed tokens and keep only the information needed. This is done so important details don’t get lost in the conversation.
+
+10. For issue 10, the design pattern that addresses prompt injection is defense in depth. Use instruction hierarchy, delimiters, and provenance labels to treat information as data rather than instructions. Tool allowlists and schema validation add extra protection. No single guardrail can stop every prompt injection, so using multiple in defense in depth is the best option.
+
+11. For issue 11, the design pattern that addresses sycophancy is tool-based verification. It needs an outside check on the answer. The chatbot should check the user’s claim against actual statistics and sources instead of just agreeing with whatever they say. This gives it different evidence or an outside anchor to check against instead of being influenced by the user.
+
+12. For issue 12, the design patterns that address latency are parallelism and routing. The 3 agents should run all at the same time to reduce time spent. Routing should send follow-up requests directly to the agents that can answer them to avoid unnecessary calls. This reduces waiting rather than running every agent after another and rebuilding the report for every question,
+
+13. For issue 13, the design patterns that address cost are caching and context compression. Reuse results that have been saved when the request and sources have not changed and summarize older turns to shed tokens. This reduces token use rather than repeating the same work over again and sending the full conversation every time.
+
+14. For issue 14, the design patterns that address invalid formats are structured outputs and schema validation. Each agent should return all information using a JSON schema. Pydantic should validate the results. If it does not meet this required format, allow a fix to be requested. This is more dependable than asking for a format in the prompt because it doesn’t mean it’ll necessarily follow it the same every time.
+
+15. For issue 15, the design pattern that addresses prompt sensitivity is a prompt template with systematic prompt evaluation. Test prompt changes on a small sample of opponents and check if they meet the goals and retrieve evidence that is relevant. Then keep changes only if they improve the results. This is better than accepting a rewrite just because it sounds right or detailed.
+
+16. For issue 16, the design pattern that addresses information loss is structured handoff payloads. Each agent should summarize its findings in a format that has an opponent, weeks, evidence, and limitations when passing them on to another agent. This gives the synthesis agent the context it needs in order to summarize what was discussed because it can’t see what the other agents saw.
+
+17. For issue 17, the design pattern that addresses error propagation is validation between stages. Every result should be looked at as unverified, and it needs to be checked for its format as well as any evidence before passing it to the synthesis agent. This helps recognize mistakes before later stages, or agents carry them on.
+
+18. For issue 18, the design pattern that addresses unbounded loops is defined termination criteria. The workflow should use a step cap, token budget, stall detection, and a partial answer that says why it stopped. When it does hit a limit, it should report what is missing and continue with the information it has. This prevents repeated calls that make no progress. This is better than relying on the model to stop.
 
 
 ## Final Thoughts
