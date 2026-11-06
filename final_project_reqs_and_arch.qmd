@@ -108,7 +108,7 @@ Number every requirement — the later sections refer back to them by number.
 
 24. The solution should use deterministic code for calculations, sorting, filtering, and comparing opponent statistics instead of asking the LLM. Also, Python code should check for duplicate plays and missing values. If missing data affecting calculations exists, it should explain and not make up a value.
 
-25. The solution should return each agent’s findings in a consistent structured format using Pydantic. Each agent's output has to include the opponent, games, weeks chosen, tendencies, observations, supporting evidence, and limitations.
+25. The solution should return each agent’s findings in a consistent structured format. Each agent's output has to include the opponent, games, weeks chosen, tendencies, observations, supporting evidence, and limitations.
 
 26. The solution should make sure sources line up with the opponent and weeks chosen. Reporting from earlier in the 2026 season can be labeled as background, but shouldn’t be evidence of tendencies for the weeks chosen. Reporting from previous seasons should not be used at all.
 
