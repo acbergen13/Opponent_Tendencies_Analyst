@@ -23,6 +23,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "mypy~=1.14",
+    "pandas-stubs>=2.3,<2.4",
+    "polars>=2.0,<3",
     "pytest~=8.3",
     "pytest-cov~=6.0",
     "ruff>=0.9,<1",
@@ -59,7 +61,7 @@ known-first-party = ["opponent_tendencies"]
 [tool.mypy]
 python_version = "3.12"
 mypy_path = "src"
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true

@@ -95,3 +95,10 @@ def test_get_settings_reads_process_environment(monkeypatch: pytest.MonkeyPatch)
         get_settings.cache_clear()
 
     assert settings.vt_arc_model == "vt-arc-llm"
+
+
+def test_resolve_data_dir_needs_no_model_credentials() -> None:
+    from opponent_tendencies.config import resolve_data_dir
+
+    assert resolve_data_dir({"DATA_DIR": "~/season-data"}) == Path.home() / "season-data"
+    assert resolve_data_dir({}) == Path("data")

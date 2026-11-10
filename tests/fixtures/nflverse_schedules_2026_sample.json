@@ -1,0 +1,85 @@
+{
+ "source": "nflreadpy.load_schedules(2026)",
+ "retrieved_at": "2026-11-10",
+ "season": 2026,
+ "columns": [
+  "game_id",
+  "season",
+  "week",
+  "game_type",
+  "gameday",
+  "home_team",
+  "away_team",
+  "home_score",
+  "away_score",
+  "location",
+  "stadium"
+ ],
+ "rows": [
+  {
+   "game_id": "2026_01_NE_SEA",
+   "season": 2026,
+   "week": 1,
+   "game_type": "REG",
+   "gameday": "2026-09-09",
+   "home_team": "SEA",
+   "away_team": "NE",
+   "home_score": 13,
+   "away_score": 10,
+   "location": "Home",
+   "stadium": "Lumen Field"
+  },
+  {
+   "game_id": "2026_01_SF_LA",
+   "season": 2026,
+   "week": 1,
+   "game_type": "REG",
+   "gameday": "2026-09-10",
+   "home_team": "LA",
+   "away_team": "SF",
+   "home_score": 7,
+   "away_score": 27,
+   "location": "Neutral",
+   "stadium": "Melbourne Cricket Ground"
+  },
+  {
+   "game_id": "2026_02_MIA_SF",
+   "season": 2026,
+   "week": 2,
+   "game_type": "REG",
+   "gameday": "2026-09-20",
+   "home_team": "SF",
+   "away_team": "MIA",
+   "home_score": 35,
+   "away_score": 13,
+   "location": "Home",
+   "stadium": "Levi's Stadium"
+  },
+  {
+   "game_id": "2026_02_SEA_ARI",
+   "season": 2026,
+   "week": 2,
+   "game_type": "REG",
+   "gameday": "2026-09-20",
+   "home_team": "ARI",
+   "away_team": "SEA",
+   "home_score": 7,
+   "away_score": 31,
+   "location": "Home",
+   "stadium": "State Farm Stadium"
+  },
+  {
+   "game_id": "2026_18_SF_ARI",
+   "season": 2026,
+   "week": 18,
+   "game_type": "REG",
+   "gameday": "2027-01-10",
+   "home_team": "ARI",
+   "away_team": "SF",
+   "home_score": null,
+   "away_score": null,
+   "location": "Home",
+   "stadium": "State Farm Stadium"
+  }
+ ]
+}

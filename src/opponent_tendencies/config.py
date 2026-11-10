@@ -118,6 +118,17 @@ def _read_env(env: Mapping[str, str] | None) -> Mapping[str, str]:
     return os.environ
 
 
+def resolve_data_dir(env: Mapping[str, str] | None = None) -> Path:
+    """Return the data directory without requiring LLM credentials.
+
+    Data ingestion, index builds, and offline scripts only need ``DATA_DIR``;
+    they should not fail because a model key is absent. Full :class:`Settings`
+    remains the gate for anything that calls the LLM.
+    """
+
+    return _path_setting(_read_env(env), "DATA_DIR", DEFAULT_DATA_DIR)
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return the process-wide settings, loading and validating them once."""
