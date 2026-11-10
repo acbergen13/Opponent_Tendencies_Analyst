@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +23,7 @@ from typing import Final
 from pydantic import BaseModel, ValidationError
 
 from opponent_tendencies.config import resolve_data_dir
+from opponent_tendencies.data.jsonio import atomic_write_text, canonical_dump
 from opponent_tendencies.models import (
     TEAM_DISPLAY_NAMES,
     Game,
@@ -135,7 +134,7 @@ class SeasonData:
     def revision(self) -> str:
         """Content hash of the canonical payload, used to key report caches."""
 
-        payload = _dump(_payload(self.season, self.games, self.plays))
+        payload = canonical_dump(_payload(self.season, self.games, self.plays))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -229,7 +228,7 @@ class SeasonStore:
 
     def _write(self, games: Sequence[Game], plays: Sequence[Play]) -> None:
         payload = _payload(self.season, games, plays)
-        _atomic_write(self.path, _dump(payload))
+        atomic_write_text(self.path, canonical_dump(payload))
 
 
 @dataclass(frozen=True)
@@ -330,44 +329,6 @@ def _payload(
         "games": [game.model_dump(mode="json") for game in ordered_games],
         "plays": [play.model_dump(mode="json") for play in ordered_plays],
     }
-
-
-def _dump(payload: Mapping[str, object]) -> str:
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n"
-
-
-def _atomic_write(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temp_path = Path(temp_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temp_path, 0o644)
-        os.replace(temp_path, path)
-    except BaseException:
-        temp_path.unlink(missing_ok=True)
-        raise
-    _fsync_directory(path.parent)
-
-
-def _fsync_directory(directory: Path) -> None:
-    """Best-effort directory sync so the rename survives a crash."""
-
-    try:
-        descriptor = os.open(directory, os.O_RDONLY)
-    except OSError:  # pragma: no cover - platform dependent
-        return
-    try:
-        os.fsync(descriptor)
-    except OSError:  # pragma: no cover - platform dependent
-        pass
-    finally:
-        os.close(descriptor)
 
 
 def _validate_records[Model: BaseModel](

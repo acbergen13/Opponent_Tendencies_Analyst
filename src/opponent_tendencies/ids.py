@@ -58,6 +58,26 @@ def make_media_id(source_id: str, url: str) -> str:
     return f"med_{_hash_parts(source_id.strip().lower(), url.strip())}"
 
 
+def make_chunk_id(
+    media_id: str,
+    char_start: int,
+    char_end: int,
+    occurrence: int = 0,
+) -> str:
+    """Stable chunk identity from its article and character span.
+
+    Chunk IDs are stored on media evidence and retrieval results, so they must
+    not depend on chunking parameters, insertion order, or the current run.
+    """
+
+    return "chk_" + _hash_parts(
+        media_id.strip(),
+        int(char_start),
+        int(char_end),
+        int(occurrence),
+    )
+
+
 def make_quote_id(
     media_id: str,
     speaker: str,

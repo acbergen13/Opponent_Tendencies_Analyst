@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "season": 2026,
+  "description": "Curated sample corpus for Stage 3. Text is synthetic and is not a quotation of any real article or press conference; URLs use allowlisted publisher domains.",
+  "retrieved_at": "2026-11-10T12:00:00Z",
+  "items": [
+    {
+      "source_id": "espn-nfl",
+      "source_type": "article",
+      "title": "Bills lean on early-down runs to control games",
+      "author": "Chris Okafor",
+      "url": "https://www.espn.com/nfl/story/_/id/2026/bills-early-down-runs",
+      "published_on": "2026-10-13",
+      "week": 5,
+      "game_id": "2026_05_BUF_LA",
+      "opponent": "BUF",
+      "body": "Buffalo has settled into a familiar early-down identity. On first and second down, the Bills are content to hand the ball off between the tackles and let their offensive line create movement before the defense can settle.\n\nThe staff has paired those runs with condensed formations that pull an extra defender into the box. When opponents cheat toward the run, Buffalo has answered with play-action throws to the tight end behind the second level. The pattern is not flashy, but it keeps the offense on schedule and out of obvious third-down passing situations."
+    },
+    {
+      "source_id": "the-athletic",
+      "source_type": "film_breakdown",
+      "title": "Film room: Buffalo's condensed formations",
+      "author": "Elliot Park",
+      "url": "https://www.theathletic.com/2026/10/20/bills-condensed-formations-film",
+      "published_on": "2026-10-20",
+      "week": 6,
+      "game_id": "2026_06_BUF_LV",
+      "opponent": "BUF",
+      "body": "The film shows a clear preference for condensed alignments on early downs. Buffalo tightens both receivers near the core of the formation, which compresses the defense and makes the run-pass read easier for the quarterback.\n\nThat alignment creates space for outside-zone runs and quick play-action concepts. It also limits the number of clean blitz angles a defense can create. The tradeoff is that the offense invites crowded fronts, so the Bills have started using motion to identify coverage before the snap."
+    },
+    {
+      "source_id": "espn-nfl",
+      "source_type": "article",
+      "title": "Bills adjust their third-down plan after a tough stretch",
+      "author": "Maya Chen",
+      "url": "https://www.espn.com/nfl/story/_/id/2026/bills-third-down-adjustment",
+      "published_on": "2026-11-02",
+      "week": 8,
+      "game_id": "2026_08_BAL_BUF",
+      "opponent": "BUF",
+      "body": "After struggling to convert third downs earlier in the season, Buffalo has shortened its third-down menu. The offense is using more quick throws to the slot and fewer deep concepts when the distance is manageable.\n\nThe change shows up most clearly on third and short. Buffalo has leaned on a compact formation, sent a receiver in motion, and handed the ball off when the defense widened its edge. Coaches described the approach as an attempt to stay on schedule rather than chase explosive plays."
+    },
+    {
+      "source_id": "espn-nfl",
+      "source_type": "article",
+      "title": "What changed for Buffalo after Week 1",
+      "author": "Chris Okafor",
+      "url": "https://www.espn.com/nfl/story/_/id/2026/bills-week-one-response",
+      "published_on": "2026-09-18",
+      "week": 2,
+      "game_id": "2026_02_DET_BUF",
+      "opponent": "BUF",
+      "body": "Buffalo's Week 1 loss prompted a simpler plan on offense. The Bills reduced their pre-snap motion, kept the same personnel on the field for longer stretches, and asked the quarterback to get the ball out quickly on early downs.\n\nThat adjustment is a useful piece of background for the season, but it describes a different opponent and an earlier week than the current report window."
+    },
+    {
+      "source_id": "espn-nfl",
+      "source_type": "article",
+      "title": "Buffalo's offseason emphasis on red-zone efficiency",
+      "author": "Chris Okafor",
+      "url": "https://www.espn.com/nfl/story/_/id/2026/bills-offseason-red-zone",
+      "published_on": "2026-08-15",
+      "opponent": "BUF",
+      "body": "Buffalo spent the offseason talking about red-zone efficiency. The staff wants tighter splits near the goal line, more play-action, and a run game that can force a defense to defend the full width of the field. This is background from training camp and is not tied to a regular-season week."
+    },
+    {
+      "source_id": "buffalo-news",
+      "source_type": "coach_quote",
+      "title": "McDermott and Brady after the Week 9 loss",
+      "author": "Jordan Ellis",
+      "url": "https://www.buffalonews.com/bills/2026/11/09/mcdermott-brady-week-9",
+      "published_on": "2026-11-09",
+      "week": 9,
+      "game_id": "2026_09_BUF_MIN",
+      "opponent": "BUF",
+      "body": "Sean McDermott: We have to run the ball better on first down. We kept putting ourselves behind the chains.\n\nSean McDermott: Their pressure forced us to check the ball down, and that is on me. We will get back to our early-down rules.\n\nJoe Brady: We wanted to stay patient with the run, but the game got away from us. We will look at the third-down plan and make sure our guys are comfortable.",
+      "quotes": [
+        {
+          "speaker": "Sean McDermott",
+          "speaker_role": "head_coach",
+          "team": "BUF",
+          "spoken_on": "2026-11-09",
+          "text": "We have to run the ball better on first down."
+        },
+        {
+          "speaker": "Sean McDermott",
+          "speaker_role": "head_coach",
+          "team": "BUF",
+          "spoken_on": "2026-11-09",
+          "text": "Their pressure forced us to check the ball down, and that is on me."
+        },
+        {
+          "speaker": "Joe Brady",
+          "speaker_role": "offensive_coordinator",
+          "team": "BUF",
+          "spoken_on": "2026-11-09",
+          "text": "We wanted to stay patient with the run, but the game got away from us."
+        }
+      ]
+    },
+    {
+      "source_id": "kansas-city-star",
+      "source_type": "article",
+      "title": "Chiefs use motion to create third-down answers",
+      "author": "Dana Whitfield",
+      "url": "https://www.kansascity.com/sports/nfl/chiefs/article/2026/10/19/third-down-motion.html",
+      "published_on": "2026-10-19",
+      "week": 6,
+      "game_id": "2026_06_LAC_KC",
+      "opponent": "KC",
+      "body": "Kansas City has leaned on pre-snap motion to make the defense declare its coverage on third down. The Chiefs frequently shift a tight end across the formation, then throw behind the motion to the vacated area.\n\nWhen defenses stay disciplined, the quarterback has checked to a quick run or a screen. The result is a third-down offense that asks the defense to make a decision before the snap rather than a static call."
+    },
+    {
+      "source_id": "kansas-city-star",
+      "source_type": "coach_quote",
+      "title": "Andy Reid after the Week 8 win",
+      "author": "Dana Whitfield",
+      "url": "https://www.kansascity.com/sports/nfl/chiefs/article/2026/11/01/reid-week-8.html",
+      "published_on": "2026-11-01",
+      "week": 8,
+      "game_id": "2026_08_KC_DEN",
+      "opponent": "KC",
+      "body": "Andy Reid: We did not execute in the red zone, and that starts with me. Give credit to their defense for tightening up.",
+      "quotes": [
+        {
+          "speaker": "Andy Reid",
+          "speaker_role": "head_coach",
+          "team": "KC",
+          "spoken_on": "2026-11-01",
+          "text": "We did not execute in the red zone, and that starts with me."
+        }
+      ]
+    },
+    {
+      "source_id": "nfl-com",
+      "source_type": "article",
+      "title": "Dolphins build their passing game around quick reads",
+      "author": "Mara Quinn",
+      "url": "https://www.nfl.com/news/2026/dolphins-quick-reads-week-3",
+      "published_on": "2026-09-28",
+      "week": 3,
+      "game_id": "2026_03_KC_MIA",
+      "opponent": "MIA",
+      "body": "Miami's offense is built to get the ball out quickly. The Dolphins use tight splits and a steady diet of slants, option routes, and screens to force defenders to tackle in space.\n\nAgainst Kansas City, that plan produced a handful of efficient early-down throws. The offense struggled when it fell behind the chains, which is a useful caution for any opponent preparing for Miami's pace."
+    },
+    {
+      "source_id": "the-athletic",
+      "source_type": "film_breakdown",
+      "title": "Film room: San Francisco's red-zone window",
+      "author": "Elliot Park",
+      "url": "https://www.theathletic.com/2026/10/20/49ers-red-zone-film",
+      "published_on": "2026-10-20",
+      "week": 6,
+      "game_id": "2026_06_WAS_SF",
+      "opponent": "SF",
+      "body": "San Francisco compresses the field in the red zone with tight formations and a lot of play-action. The 49ers want the defense to step toward the run before the quarterback works the back of the end zone.\n\nThe film also shows a willingness to run the ball on third and short near the goal line. That combination keeps the defense guessing between a downhill run and a quick throw to the tight end."
+    },
+    {
+      "source_id": "ap-nfl",
+      "source_type": "article",
+      "title": "Ravens lean on play-action after a fast start",
+      "author": "Renee Salas",
+      "url": "https://www.apnews.com/article/2026/10/05/ravens-play-action",
+      "published_on": "2026-10-05",
+      "week": 4,
+      "game_id": "2026_04_TEN_BAL",
+      "opponent": "BAL",
+      "body": "Baltimore has used a fast start to set up play-action on early downs. The Ravens run the ball with enough force to pull linebackers forward, then attack the space behind them with crossing routes and throws to the tight end.\n\nThat pattern is not new for Baltimore, but the current version leans on motion and a condensed formation to make the run action look identical to the passing concept."
+    },
+    {
+      "source_id": "ap-nfl",
+      "source_type": "coach_quote",
+      "title": "Dan Campbell after the Week 9 win",
+      "author": "Renee Salas",
+      "url": "https://www.apnews.com/article/2026/11/08/lions-campbell-week-9",
+      "published_on": "2026-11-08",
+      "week": 9,
+      "game_id": "2026_09_DET_MIA",
+      "opponent": "DET",
+      "body": "Dan Campbell: We wanted to establish the run, and when they loaded the box we took our shots. I thought our offensive line answered the bell.",
+      "quotes": [
+        {
+          "speaker": "Dan Campbell",
+          "speaker_role": "head_coach",
+          "team": "DET",
+          "spoken_on": "2026-11-08",
+          "text": "We wanted to establish the run, and when they loaded the box we took our shots."
+        }
+      ]
+    }
+  ]
+}

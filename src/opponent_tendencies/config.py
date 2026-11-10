@@ -129,6 +129,12 @@ def resolve_data_dir(env: Mapping[str, str] | None = None) -> Path:
     return _path_setting(_read_env(env), "DATA_DIR", DEFAULT_DATA_DIR)
 
 
+def resolve_chroma_dir(env: Mapping[str, str] | None = None) -> Path:
+    """Return the Chroma directory without requiring LLM credentials."""
+
+    return _path_setting(_read_env(env), "CHROMA_DIR", DEFAULT_CHROMA_DIR)
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return the process-wide settings, loading and validating them once."""

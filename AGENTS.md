@@ -8,12 +8,13 @@ Two things live here:
    "Opponent Tendencies Analyst"). This is the assignment artifact.
 2. **The implementation** described by `PLAN.md`: a Python package under
    `src/opponent_tendencies/` with a Streamlit app. Development proceeds stage
-   by stage in `PLAN.md` §4. Stages 0–2 are done: packaging/config, the frozen
+   by stage in `PLAN.md` §4. Stages 0–3 are done: packaging/config, the frozen
    Pydantic contracts in `models.py` with the LLM JSON schemas in
-   `llm/schemas.py`, and nflverse play-by-play ingestion into the atomic JSON
-   store at `data/seasons/<season>.json`. Stats, validation, agents, and UI are
-   not implemented yet — do not assume modules that the plan lists but the tree
-   lacks.
+   `llm/schemas.py`, nflverse play-by-play ingestion into the atomic JSON store
+   at `data/seasons/<season>.json`, and curated media ingestion plus a
+   persistent Chroma index at `data/media/<season>.json` / `data/chroma`. Stats,
+   validation, agents, and UI are not implemented yet — do not assume modules
+   that the plan lists but the tree lacks.
 
 `docs/` is graded and separate from the app. Implementation code must live
 outside `docs/`.
@@ -47,6 +48,7 @@ pytest -q
 ruff check . && ruff format --check .
 mypy src tests scripts
 python scripts/refresh_data.py --season 2026   # nflverse -> data/seasons/2026.json
+python scripts/build_index.py --season 2026    # corpus/media_2026.json -> store + Chroma
 streamlit run app.py
 ```
 
@@ -65,3 +67,7 @@ generated `data/` / Chroma directories.
 - Stage 1 contracts in `opponent_tendencies.models` are frozen. Change them deliberately and keep `tests/unit/test_models.py` green; `llm/schemas.py` builds the LLM wire schemas from the same enums/types, with server-owned identity stamped by Python.
 - Stage 2 ingestion in `data/nflverse.py` pins the nflverse columns it reads (`PLAY_COLUMNS`, `GAME_COLUMNS`); a missing column raises `MissingColumnsError` instead of being skipped. `nflreadpy` returns Polars, 2026 uses `WAS` (aliased to `WSH`), and nflverse fills third-down flags on every row, so the normalizer keeps them only on down 3. Re-spike the client before changing the column list.
 - `data/seasons/<season>.json` is generated. `SeasonStore` upserts by `game_id` / `(game_id, play_id)` in one atomic write and does not rewrite unchanged data, so a double refresh is byte-identical. Never hand-edit it; delete and re-run `scripts/refresh_data.py`. Fixtures in `tests/fixtures/nflverse_*_sample.json` are trimmed real 2026 pulls.
+- Stage 3 media lives in `data/media/<season>.json` (generated, atomic, canonical) and the curated input lives in `corpus/media_<season>.json` (tracked). `MediaStore` upserts media by `media_id` and replaces each incoming item's whole quote set, so a corrected/removed speaker cannot leave stale quotes. Never hand-edit the generated store; delete and re-run `scripts/build_index.py`. Refetching identical text keeps the index manifest stable and reuses the index; only title/body/quote/filter changes force a rebuild.
+- `data/media_ingest.py` enforces the source allowlist (publisher, HTTPS allowlisted domain, media type, trusted authors). Every quote must be an exact character span of its stored body. Corpus documents reject unknown fields, and media/quote IDs derive from `source_id` + URL and media/speaker/text/occurrence respectively; construct changed records by revalidation (`tests/media_fixtures.py` helpers), not `model_copy` alone.
+- `data/chunking.py` owns all chunk boundaries and IDs (`make_chunk_id`); defaults are 1200/200 characters and cuts prefer paragraphs, lines, sentences, then whitespace. `data/index.py` stores one cosine Chroma collection per season and records `model_id`, `schema_version`, `chunk_size`, `chunk_overlap`, `manifest_hash`, and `unit_count`. Any mismatch deletes and fully rebuilds the collection; retrieval requires opponent and season and filters weeks/source types/unit kinds in Chroma before similarity search.
+- Embeddings are pinned. `ArcEmbedder` uses `EMBEDDING_MODEL` (VT ARC `Qwen3-Embedding-4B`, 2560 dimensions, verified); `HashingEmbedder` (`local-hash-v1-<dimensions>`) is offline/test-only. A query embedder whose model ID differs from the stored index model is refused rather than mixing vector spaces. `tests/` and the default `pytest` run never call VT ARC; use `--embedder hashing` for an offline index build.

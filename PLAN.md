@@ -3,8 +3,8 @@
 ## 0. Context
 
 - Source of truth: `docs/final_project_reqs_and_arch_zachary_and_adam.qmd` (requirements 1–30, issues 1–18, architecture, mitigations).
-- This repo is currently docs-only: no manifest, tests, lint config, or CI. `docs/` is the graded deliverable; implementation code should live outside it.
-- Environment: Python 3.13 (`/opt/anaconda3`); `streamlit`, `pydantic`, `pandas`, `pytest`, `httpx` installed; `chromadb`, `openai`, `nflreadpy` not installed.
+- Stages 0–3 are implemented: packaging/config, frozen contracts, nflverse play-by-play ingestion, and curated media ingestion plus a persistent Chroma index. `docs/` remains the graded deliverable; implementation code lives outside it.
+- Environment: Python 3.13 in a local `.venv`; `chromadb`, `nflreadpy`, `streamlit`, `pydantic`, `pytest`, `httpx`, `ruff`, and `mypy` are pinned in `pyproject.toml` and verified on 3.13.
 - `PLAN.md` is engineering planning only. The assignment's no-AI note still applies to the written deliverable.
 
 ## 1. Design invariants
@@ -29,13 +29,16 @@ src/opponent_tendencies/
   data/
     nflverse.py                 # PBP fetch wrapper
     play_store.py               # JSON store, upsert by game_id+play_id
+    jsonio.py                   # canonical JSON + atomic writes (shared)
     media_ingest.py             # source allowlist + connectors
     media_store.py              # metadata/full text/quotes
+    chunking.py                 # deterministic word-aware chunking + evaluation
     index.py                    # ChromaDB build/retrieve/rebuild detection
   stats/engine.py               # deterministic tendency calculations
   validation/checks.py          # source existence, opponent/week alignment
   llm/
     client.py                   # VT ARC client, retries, timeouts, logging
+    embeddings.py               # pinned VT ARC / offline hashing embedders
     schemas.py                  # JSON schemas for structured outputs
     prompts/                    # versioned agent + verifier + follow-up prompts
   agents/
@@ -55,7 +58,8 @@ scripts/
   build_index.py
   optimize_prompts.py           # offline prompt optimization (req 18)
   eval_consistency.py           # 5-run reliability evaluation
-data/                           # gitignored: JSON store, Chroma index, caches
+corpus/                         # tracked curated media corpus (fixture input)
+data/                           # gitignored: JSON stores, Chroma index, caches
 ```
 
 ## 3. Tooling
@@ -72,13 +76,13 @@ data/                           # gitignored: JSON store, Chroma index, caches
 
 ## 4. Development stages
 
-### Stage 0 — Skeleton and tooling
+### Stage 0 — Skeleton and tooling ✅
 - Create package skeleton, `pyproject.toml`, `.env.example`, `.gitignore`, and empty test layout.
 - Verify dependency install on Python 3.13; fall back to a 3.12 environment if `chromadb` or the nflverse client is incompatible.
 - **Exit:** package imports, `pytest` runs, config fails clearly when `VT_ARC_API_KEY` is missing.
 - **Reqs:** foundation for all.
 
-### Stage 1 — Contracts and schemas
+### Stage 1 — Contracts and schemas ✅
 - Define Pydantic models: `Game`, `Play`, `MediaItem`, `Quote`, `EvidenceRef`, `StatTable`, `AgentFinding`, `AgentOutput`, `Report`, `ValidationResult`, `RunStatus`.
 - `AgentOutput` must always include opponent, games, weeks, tendencies, observations, evidence, limitations (req 25).
 - Stable IDs: `game_id`, `play_id`, `media_id`, `quote_id`, `evidence_id`.
@@ -86,7 +90,7 @@ data/                           # gitignored: JSON store, Chroma index, caches
 - **Exit:** round-trip/schema tests; contracts frozen before agent work.
 - **Reqs:** 5, 25.
 
-### Stage 2 — Play-by-play ingestion and JSON store
+### Stage 2 — Play-by-play ingestion and JSON store ✅
 - Spike the maintained nflverse Python client; verify actual 2026 regular-season columns.
 - Normalize fields needed for stats: game/week/team, down, distance, field position, play type, yards, conversions; discard unneeded payload.
 - Implement atomic JSON store with upsert keyed by `(game_id, play_id)`; refresh returns inserted/skipped counts.
@@ -94,7 +98,7 @@ data/                           # gitignored: JSON store, Chroma index, caches
 - **Exit:** double-refresh idempotency test; missing-column and empty-week handling; fixture-based.
 - **Reqs:** 2, 3, 4.
 
-### Stage 3 — Media ingestion, metadata store, and ChromaDB
+### Stage 3 — Media ingestion, metadata store, and ChromaDB ✅
 - Build a source allowlist and connector interface for trusted sports sites/reporters; start with a cached/curated fixture corpus, then add live connectors only where terms permit.
 - Store article/breakdown/quote text plus author, publisher, date, URL, opponent, season, week, game, source type, and speaker/coach.
 - Preserve quotes verbatim; never rewrite direct quotes.
@@ -102,6 +106,15 @@ data/                           # gitignored: JSON store, Chroma index, caches
 - Rebuild only when a content hash/manifest changes; otherwise reuse.
 - Retrieval must filter by opponent, season, week range, and source type before similarity search.
 - **Exit:** retrieval fixtures return correct opponent/week sources; index-reuse and embedding-consistency tests; chunking evaluation.
+- **Implementation notes:**
+  - Media lives in the atomic, canonical store `data/media/<season>.json`; an incoming item replaces its whole quote set so corrected or removed speakers cannot leave stale quotes.
+  - `MediaItem` IDs derive from `source_id` + URL and `content_hash` from title + body. The index manifest also covers quote text and filter metadata but excludes `retrieved_at`, so refetching identical text reuses the index.
+  - The allowlist checks publisher, HTTPS domain, media type, and trusted authors; every quote must be an exact span of the stored body.
+  - Chunking defaults to 1200/200 characters and prefers paragraph, line, sentence, then whitespace boundaries.
+  - The index is one cosine Chroma collection per season (`media_<season>`) recording `model_id`, `schema_version`, `chunk_size`, `chunk_overlap`, `manifest_hash`, and `unit_count`; any mismatch deletes and rebuilds the collection.
+  - Coach-quote media index exact quote spans; other media index overlapping chunks plus exact quote units.
+  - `ArcEmbedder` uses `EMBEDDING_MODEL` (VT ARC `Qwen3-Embedding-4B` is verified at 2560 dimensions); `HashingEmbedder` is an explicit offline/test provider. A query embedder whose model ID differs from the stored one is refused.
+  - Retrieval requires opponent and season, then filters exact weeks or a week range plus source types/unit kinds before similarity search. Build with `python scripts/build_index.py --season 2026`.
 - **Reqs:** 6, 7, 8, 12, 13.
 
 ### Stage 4 — Deterministic statistics engine
@@ -246,10 +259,11 @@ Recommended vertical slices: stats-only CLI after Stage 5; full-report CLI after
 | 29 | 6 |
 | 30 | 9, 10 |
 
-## 9. Decisions to confirm
+## 9. Decisions
 
-1. **PLAN.md location:** repo root (recommended) rather than `docs/`, so the graded deliverable folder stays clean.
-2. **Media strategy:** start with a curated/cached corpus behind a connector interface (recommended), then add live fetching only for sources whose terms allow it.
-3. **Media metadata store:** SQLite for queryable metadata + ChromaDB for vectors (recommended), versus keeping metadata in JSON.
-4. **Embeddings:** use VT ARC embeddings if available; otherwise pin a local model and record it in index metadata.
-5. **Model alias:** confirm which VT ARC model ID the app should target (the OpenCode config lists aliases, but the app should read `VT_ARC_MODEL` from env).
+1. **PLAN.md location:** repo root (confirmed), so the graded deliverable folder stays clean.
+2. **Media strategy:** curated/cached corpus behind a connector interface first (confirmed); live fetching only for sources whose terms allow it.
+3. **Media metadata store:** per-season atomic JSON (`data/media/<season>.json`) rather than SQLite (confirmed for Stage 3); the media store is the source of truth and Chroma remains derived. Revisit SQLite only if metadata queries outgrow the in-memory store.
+4. **Embeddings:** VT ARC embeddings are available and pinned through `EMBEDDING_MODEL` (confirmed, `Qwen3-Embedding-4B` verified); an offline `HashingEmbedder` exists for tests and chunking evaluation, and the resolved model ID is recorded in index metadata.
+5. **Model alias:** the app reads `VT_ARC_MODEL` from env (confirmed); `EMBEDDING_MODEL` is separate so the chat and embedding models can change independently.
+
