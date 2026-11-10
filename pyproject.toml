@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opponent-tendencies"
+version = "0.1.0"
+description = "NFL opponent tendencies analyst: deterministic statistics plus cited LLM synthesis."
+readme = "PLAN.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+
+dependencies = [
+    "chromadb~=1.5",
+    "httpx~=0.28",
+    "nflreadpy~=0.1.5",
+    "pandas~=2.2",
+    "pydantic~=2.10",
+    "python-dotenv~=1.1",
+    "streamlit~=1.45",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy~=1.14",
+    "pytest~=8.3",
+    "pytest-cov~=6.0",
+    "ruff>=0.9,<1",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+markers = [
+    "integration: tests that touch the filesystem or network fixtures",
+    "slow: tests that take more than a couple of seconds",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["opponent_tendencies"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+files = ["src", "tests"]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
