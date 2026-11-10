@@ -8,9 +8,10 @@ Two things live here:
    "Opponent Tendencies Analyst"). This is the assignment artifact.
 2. **The implementation** described by `PLAN.md`: a Python package under
    `src/opponent_tendencies/` with a Streamlit app. Development proceeds stage
-   by stage in `PLAN.md` §4; the repo currently contains the Stage 0 skeleton
-   (packaging, config, test layout). No agents, stats, or ingestion code exist
-   yet — do not assume modules that the plan lists but the tree lacks.
+   by stage in `PLAN.md` §4. Stages 0–1 are done: packaging/config plus the
+   frozen Pydantic contracts in `models.py` and the LLM JSON schemas in
+   `llm/schemas.py`. Ingestion, stats, validation, agents, and UI are not
+   implemented yet — do not assume modules that the plan lists but the tree lacks.
 
 `docs/` is graded and separate from the app. Implementation code must live
 outside `docs/`.
@@ -58,3 +59,4 @@ generated `data/` / Chroma directories.
 - The diagram is referenced by a relative filename, so the PNG must stay in `docs/` beside the `.qmd`.
 - Assignment text in the `.qmd` states the write-up must be produced without AI assistance. Treat content generation accordingly and limit agent help to repo mechanics unless the user says otherwise.
 - Deterministic Python owns all math, filtering, sorting, formatting, duplicate checks, and source-ID checks; the LLM only interprets, extracts, and synthesizes (`PLAN.md` §1). Keep that split when adding code.
+- Stage 1 contracts in `opponent_tendencies.models` are frozen. Change them deliberately and keep `tests/unit/test_models.py` green; `llm/schemas.py` builds the LLM wire schemas from the same enums/types, with server-owned identity stamped by Python.
