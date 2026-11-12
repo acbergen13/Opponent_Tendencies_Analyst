@@ -19,7 +19,7 @@ import logging
 import re
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import httpx
@@ -34,12 +34,24 @@ from opponent_tendencies.llm.schemas import (
 
 logger = logging.getLogger("opponent_tendencies.llm.client")
 
-DEFAULT_TIMEOUT_SECONDS = 60.0
+DEFAULT_TIMEOUT_SECONDS = 300.0
 DEFAULT_MAX_RETRIES = 2
 DEFAULT_RETRY_BACKOFF_SECONDS = 0.5
 DEFAULT_MAX_BACKOFF_SECONDS = 8.0
 DEFAULT_TEMPERATURE = 0.1
-DEFAULT_STRUCTURED_MAX_TOKENS = 4096
+DEFAULT_STRUCTURED_MAX_TOKENS = 8000
+DEFAULT_ENABLE_THINKING = False
+
+# VT ARC's proxy buffers non-streaming replies and refuses ``max_tokens`` above
+# this cap (HTTP 413). Any call that needs a larger completion budget must be
+# sent with ``stream=true``; ``chat`` switches automatically above the cap.
+DEFAULT_BUFFERED_MAX_TOKENS = 8000
+
+# VT ARC serves reasoning models through vLLM. The pinned ``vt-arc-llm`` model
+# reasons by default, which can consume the whole completion cap before any
+# JSON is emitted. Structured extraction does not need hidden reasoning; send
+# the vLLM chat-template switch unless the operator opts back in.
+DISABLED_THINKING_PAYLOAD: Mapping[str, Any] = {"enable_thinking": False}
 
 RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({408, 429, 500, 502, 503, 504})
 VALID_ROLES: frozenset[str] = frozenset({"system", "user", "assistant"})
@@ -78,6 +90,14 @@ class StructuredOutputError(LLMClientError):
     """A structured output failed validation even after the repair attempt."""
 
 
+class _EmptyCompletionError(LLMResponseError):
+    """A 200 response whose message content is empty or whitespace."""
+
+    def __init__(self, message: str, *, finish_reason: str | None) -> None:
+        super().__init__(message)
+        self.finish_reason = finish_reason
+
+
 @dataclass(frozen=True)
 class LLMMessage:
     """One chat message. Only the three classic roles are allowed."""
@@ -91,10 +111,16 @@ class LLMMessage:
 
 @dataclass(frozen=True)
 class TokenUsage:
-    """Token counts reported by the endpoint (zero when the server omits them)."""
+    """Token counts reported by the endpoint (zero when the server omits them).
+
+    ``reasoning_tokens`` is a subset of ``completion_tokens`` on providers that
+    expose hidden reasoning; it is recorded for diagnostics but never added to
+    ``total_tokens`` a second time.
+    """
 
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    reasoning_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -104,6 +130,7 @@ class TokenUsage:
         return TokenUsage(
             prompt_tokens=self.prompt_tokens + other.prompt_tokens,
             completion_tokens=self.completion_tokens + other.completion_tokens,
+            reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
         )
 
 
@@ -132,6 +159,20 @@ class StructuredResult[StructuredT: WireModel]:
     model: str
 
 
+@dataclass(frozen=True)
+class _Attempt:
+    """One HTTP attempt reduced to the fields the retry loop needs."""
+
+    status: int
+    content: str = ""
+    model: str | None = None
+    finish_reason: str | None = None
+    usage: TokenUsage = field(default_factory=TokenUsage)
+    reasoning_present: bool = False
+    tool_calls: int = 0
+    error_excerpt: str = ""
+
+
 class ArcLLMClient:
     """VT ARC OpenAI-compatible chat client with bounded retries and repair."""
 
@@ -145,6 +186,7 @@ class ArcLLMClient:
         max_retries: int = DEFAULT_MAX_RETRIES,
         retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
         max_backoff_seconds: float = DEFAULT_MAX_BACKOFF_SECONDS,
+        enable_thinking: bool = DEFAULT_ENABLE_THINKING,
         http_client: httpx.Client | None = None,
     ) -> None:
         if not base_url.startswith(("http://", "https://")):
@@ -166,6 +208,7 @@ class ArcLLMClient:
         self._max_retries = max_retries
         self._retry_backoff_seconds = retry_backoff_seconds
         self._max_backoff_seconds = max_backoff_seconds
+        self._enable_thinking = enable_thinking
         self._http_client = http_client
 
     @classmethod
@@ -177,6 +220,7 @@ class ArcLLMClient:
         max_retries: int = DEFAULT_MAX_RETRIES,
         retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
         max_backoff_seconds: float = DEFAULT_MAX_BACKOFF_SECONDS,
+        enable_thinking: bool | None = None,
         http_client: httpx.Client | None = None,
     ) -> ArcLLMClient:
         """Build the client from validated environment settings."""
@@ -189,6 +233,9 @@ class ArcLLMClient:
             max_retries=max_retries,
             retry_backoff_seconds=retry_backoff_seconds,
             max_backoff_seconds=max_backoff_seconds,
+            enable_thinking=(
+                settings.vt_arc_enable_thinking if enable_thinking is None else enable_thinking
+            ),
             http_client=http_client,
         )
 
@@ -207,8 +254,13 @@ class ArcLLMClient:
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int | None = None,
         response_format: Mapping[str, Any] | None = None,
+        stream: bool | None = None,
     ) -> LLMResponse:
-        """Send one chat completion, retrying bounded, retryable failures."""
+        """Send one chat completion, retrying bounded, retryable failures.
+
+        ``stream=None`` (the default) streams only when ``max_tokens`` exceeds
+        the endpoint's buffered-mode cap; pass ``True``/``False`` to force it.
+        """
 
         self._validate_messages(messages)
         if not 0.0 <= temperature <= 2.0:
@@ -225,6 +277,17 @@ class ArcLLMClient:
             payload["max_tokens"] = max_tokens
         if response_format is not None:
             payload["response_format"] = dict(response_format)
+        if not self._enable_thinking:
+            payload["chat_template_kwargs"] = dict(DISABLED_THINKING_PAYLOAD)
+
+        use_stream = (
+            max_tokens is not None and max_tokens > DEFAULT_BUFFERED_MAX_TOKENS
+            if stream is None
+            else stream
+        )
+        if use_stream:
+            payload["stream"] = True
+            payload["stream_options"] = {"include_usage": True}
 
         total_attempts = 1 + self._max_retries
         started = time.monotonic()
@@ -233,7 +296,7 @@ class ArcLLMClient:
 
         for attempt in range(1, total_attempts + 1):
             try:
-                response = self._post_chat(payload)
+                outcome = self._send(payload, stream=use_stream)
             except httpx.TimeoutException as exc:
                 last_failure = f"timeout: {exc}"
                 last_error = exc
@@ -257,26 +320,48 @@ class ArcLLMClient:
                 self._sleep_backoff(attempt, total_attempts)
                 continue
 
-            status = response.status_code
+            status = outcome.status
             if status == httpx.codes.OK:
-                content, reply_model, finish_reason, usage = self._parse_completion(response)
+                try:
+                    content = _require_content(outcome)
+                except _EmptyCompletionError as exc:
+                    # A truncated empty reply is deterministic: the completion
+                    # cap is exhausted, so another attempt repeats the failure.
+                    if exc.finish_reason == "length":
+                        raise
+                    last_failure = str(exc)
+                    last_error = exc
+                    logger.warning(
+                        "chat_completion_retry model=%s attempt=%d/%d "
+                        "failure=empty_content finish_reason=%s",
+                        self._model,
+                        attempt,
+                        total_attempts,
+                        exc.finish_reason,
+                    )
+                    self._sleep_backoff(attempt, total_attempts)
+                    continue
+
                 latency = time.monotonic() - started
                 logger.info(
                     "chat_completion model=%s attempt=%d/%d status=200 "
-                    "latency_ms=%.0f prompt_tokens=%d completion_tokens=%d finish_reason=%s",
-                    reply_model,
+                    "latency_ms=%.0f prompt_tokens=%d completion_tokens=%d "
+                    "reasoning_tokens=%d finish_reason=%s stream=%s",
+                    outcome.model or self._model,
                     attempt,
                     total_attempts,
                     latency * 1000,
-                    usage.prompt_tokens,
-                    usage.completion_tokens,
-                    finish_reason,
+                    outcome.usage.prompt_tokens,
+                    outcome.usage.completion_tokens,
+                    outcome.usage.reasoning_tokens,
+                    outcome.finish_reason,
+                    use_stream,
                 )
                 return LLMResponse(
                     content=content,
-                    model=reply_model,
-                    finish_reason=finish_reason,
-                    usage=usage,
+                    model=outcome.model or self._model,
+                    finish_reason=outcome.finish_reason,
+                    usage=outcome.usage,
                     latency_seconds=latency,
                     attempts=attempt,
                 )
@@ -295,12 +380,17 @@ class ArcLLMClient:
                 continue
 
             raise LLMResponseError(
-                f"chat completion failed with HTTP {status}: {_error_excerpt(response)}"
+                f"chat completion failed with HTTP {status}: {outcome.error_excerpt}"
             )
 
         if isinstance(last_error, httpx.TimeoutException):
             raise LLMTimeoutError(
                 f"chat completion timed out after {total_attempts} attempts"
+            ) from last_error
+        if isinstance(last_error, _EmptyCompletionError):
+            raise LLMResponseError(
+                f"chat completion returned no content after {total_attempts} attempts: "
+                f"{last_failure}"
             ) from last_error
         raise LLMConnectionError(
             f"chat completion failed after {total_attempts} attempts: {last_failure}"
@@ -345,6 +435,8 @@ class ArcLLMClient:
         try:
             parsed = _parse_structured(first.content, model_cls)
         except (ValueError, ValidationError) as first_error:
+            if first.finish_reason == "length":
+                raise LLMResponseError(_truncation_message(first, max_tokens)) from first_error
             first_summary = _error_summary(first_error)
             logger.warning(
                 "structured_output_repair schema=%s first_error=%s",
@@ -368,6 +460,10 @@ class ArcLLMClient:
             try:
                 parsed = _parse_structured(repair.content, model_cls)
             except (ValueError, ValidationError) as second_error:
+                if repair.finish_reason == "length":
+                    raise LLMResponseError(
+                        _truncation_message(repair, max_tokens)
+                    ) from second_error
                 raise StructuredOutputError(
                     f"structured output {schema_name!r} failed validation after one "
                     f"repair attempt; first error: {first_summary}; repair error: "
@@ -384,10 +480,11 @@ class ArcLLMClient:
             )
             logger.info(
                 "structured_output schema=%s repaired=true llm_calls=2 "
-                "prompt_tokens=%d completion_tokens=%d",
+                "prompt_tokens=%d completion_tokens=%d reasoning_tokens=%d",
                 schema_name,
                 result.usage.prompt_tokens,
                 result.usage.completion_tokens,
+                result.usage.reasoning_tokens,
             )
             return result
 
@@ -402,10 +499,11 @@ class ArcLLMClient:
         )
         logger.info(
             "structured_output schema=%s repaired=false llm_calls=1 "
-            "prompt_tokens=%d completion_tokens=%d",
+            "prompt_tokens=%d completion_tokens=%d reasoning_tokens=%d",
             schema_name,
             result.usage.prompt_tokens,
             result.usage.completion_tokens,
+            result.usage.reasoning_tokens,
         )
         return result
 
@@ -435,15 +533,116 @@ class ArcLLMClient:
                 return name
         raise ValueError(f"{output.__name__!r} is not a registered structured output model")
 
-    def _post_chat(self, payload: Mapping[str, Any]) -> httpx.Response:
+    def _send(self, payload: Mapping[str, Any], *, stream: bool) -> _Attempt:
         url = f"{self._base_url}/chat/completions"
         headers = {"Authorization": f"Bearer {self._api_key}"}
+        if stream:
+            if self._http_client is not None:
+                with self._http_client.stream(
+                    "POST",
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=self._timeout_seconds,
+                ) as response:
+                    return self._read_stream(response)
+            with (
+                httpx.Client(timeout=self._timeout_seconds) as client,
+                client.stream(
+                    "POST",
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=self._timeout_seconds,
+                ) as response,
+            ):
+                return self._read_stream(response)
+
         if self._http_client is not None:
-            return self._http_client.post(
+            response = self._http_client.post(
                 url, json=payload, headers=headers, timeout=self._timeout_seconds
             )
-        with httpx.Client(timeout=self._timeout_seconds) as client:
-            return client.post(url, json=payload, headers=headers)
+        else:
+            with httpx.Client(timeout=self._timeout_seconds) as client:
+                response = client.post(url, json=payload, headers=headers)
+        if response.status_code != httpx.codes.OK:
+            return _Attempt(
+                status=response.status_code,
+                error_excerpt=_error_excerpt(response),
+            )
+        return self._parse_completion(response)
+
+    def _read_stream(self, response: httpx.Response) -> _Attempt:
+        """Consume a server-sent-events completion into one attempt result."""
+
+        if response.status_code != httpx.codes.OK:
+            response.read()
+            return _Attempt(
+                status=response.status_code,
+                error_excerpt=_error_excerpt(response),
+            )
+
+        # Some gateways ignore ``stream=true`` and return one buffered JSON body.
+        # Accept it instead of reading an empty event stream.
+        content_type = response.headers.get("content-type", "").lower()
+        if "text/event-stream" not in content_type:
+            response.read()
+            return self._parse_completion(response)
+
+        model = self._model
+        finish_reason: str | None = None
+        usage = TokenUsage()
+        reasoning_present = False
+        parts: list[str] = []
+        for line in response.iter_lines():
+            data = line.strip()
+            if not data.startswith("data:"):
+                continue
+            chunk_text = data.removeprefix("data:").strip()
+            if chunk_text == "[DONE]":
+                break
+            try:
+                chunk = json.loads(chunk_text)
+            except json.JSONDecodeError as exc:
+                raise LLMResponseError("chat completion stream returned malformed JSON") from exc
+            if not isinstance(chunk, dict):
+                raise LLMResponseError("chat completion stream chunk must be a JSON object")
+
+            reply_model = chunk.get("model")
+            if isinstance(reply_model, str) and reply_model.strip():
+                model = reply_model
+            chunk_usage = chunk.get("usage")
+            if isinstance(chunk_usage, dict):
+                usage = _token_usage(chunk_usage)
+            choices = chunk.get("choices")
+            if not isinstance(choices, list) or not choices:
+                continue
+            first = choices[0]
+            if not isinstance(first, dict):
+                continue
+            reason = first.get("finish_reason")
+            if isinstance(reason, str):
+                finish_reason = reason
+            delta = first.get("delta")
+            if not isinstance(delta, dict):
+                continue
+            text = delta.get("content")
+            if isinstance(text, str):
+                parts.append(text)
+            reasoning = delta.get("reasoning_content")
+            if not isinstance(reasoning, str):
+                reasoning = delta.get("reasoning")
+            if isinstance(reasoning, str) and reasoning.strip():
+                reasoning_present = True
+
+        return _Attempt(
+            status=httpx.codes.OK,
+            content="".join(parts),
+            model=model,
+            finish_reason=finish_reason,
+            usage=usage,
+            reasoning_present=reasoning_present,
+        )
 
     def _sleep_backoff(self, attempt: int, total_attempts: int) -> None:
         if attempt >= total_attempts:
@@ -455,9 +654,7 @@ class ArcLLMClient:
         if delay > 0:
             time.sleep(delay)
 
-    def _parse_completion(
-        self, response: httpx.Response
-    ) -> tuple[str, str, str | None, TokenUsage]:
+    def _parse_completion(self, response: httpx.Response) -> _Attempt:
         try:
             document = response.json()
         except ValueError as exc:
@@ -474,9 +671,6 @@ class ArcLLMClient:
         message = first.get("message")
         if not isinstance(message, dict):
             raise LLMResponseError("chat completion choice has no message")
-        content = message.get("content")
-        if not isinstance(content, str) or not content.strip():
-            raise LLMResponseError("chat completion message has no content")
 
         reply_model = document.get("model")
         if not isinstance(reply_model, str) or not reply_model.strip():
@@ -487,15 +681,50 @@ class ArcLLMClient:
 
         usage = document.get("usage")
         usage_document = usage if isinstance(usage, dict) else {}
-        return (
-            content,
-            reply_model,
-            finish_reason,
-            TokenUsage(
-                prompt_tokens=_int_or_zero(usage_document.get("prompt_tokens")),
-                completion_tokens=_int_or_zero(usage_document.get("completion_tokens")),
-            ),
+
+        reasoning = message.get("reasoning_content")
+        if not isinstance(reasoning, str):
+            reasoning = message.get("reasoning")
+        tool_calls = message.get("tool_calls")
+        content = message.get("content")
+        return _Attempt(
+            status=httpx.codes.OK,
+            content=content if isinstance(content, str) else "",
+            model=reply_model,
+            finish_reason=finish_reason,
+            usage=_token_usage(usage_document),
+            reasoning_present=isinstance(reasoning, str) and bool(reasoning.strip()),
+            tool_calls=len(tool_calls) if isinstance(tool_calls, list) else 0,
         )
+
+
+def _token_usage(usage: Mapping[Any, Any]) -> TokenUsage:
+    return TokenUsage(
+        prompt_tokens=_int_or_zero(usage.get("prompt_tokens")),
+        completion_tokens=_int_or_zero(usage.get("completion_tokens")),
+        reasoning_tokens=_reasoning_tokens(usage),
+    )
+
+
+def _require_content(attempt: _Attempt) -> str:
+    if attempt.content.strip():
+        return attempt.content
+    raise _EmptyCompletionError(
+        "chat completion message has no content "
+        f"(finish_reason={attempt.finish_reason}, "
+        f"completion_tokens={attempt.usage.completion_tokens}, "
+        f"reasoning_tokens={attempt.usage.reasoning_tokens}, "
+        f"reasoning_present={attempt.reasoning_present}, "
+        f"tool_calls={attempt.tool_calls})",
+        finish_reason=attempt.finish_reason,
+    )
+
+
+def _reasoning_tokens(usage: Mapping[Any, Any]) -> int:
+    details = usage.get("completion_tokens_details")
+    if not isinstance(details, dict):
+        return 0
+    return _int_or_zero(details.get("reasoning_tokens"))
 
 
 def _int_or_zero(value: object) -> int:
@@ -507,6 +736,16 @@ def _int_or_zero(value: object) -> int:
 def _error_excerpt(response: httpx.Response) -> str:
     text = response.text.strip().replace("\n", " ")
     return text[:_ERROR_EXCERPT_CHARS] or "<empty body>"
+
+
+def _truncation_message(response: LLMResponse, max_tokens: int | None) -> str:
+    cap = f"max_tokens={max_tokens}" if max_tokens is not None else "no explicit max_tokens"
+    return (
+        "chat completion response was truncated at the completion limit "
+        f"(finish_reason=length, completion_tokens={response.usage.completion_tokens}, "
+        f"reasoning_tokens={response.usage.reasoning_tokens}, {cap}); "
+        "raise the completion cap or shorten the prompt"
+    )
 
 
 def _parse_structured(content: str, model_cls: type[WireModel]) -> WireModel:
@@ -549,6 +788,8 @@ def _error_summary(exc: Exception) -> str:
 
 
 __all__ = [
+    "DEFAULT_BUFFERED_MAX_TOKENS",
+    "DEFAULT_ENABLE_THINKING",
     "DEFAULT_MAX_BACKOFF_SECONDS",
     "DEFAULT_MAX_RETRIES",
     "DEFAULT_RETRY_BACKOFF_SECONDS",

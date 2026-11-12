@@ -17,6 +17,7 @@ import pytest
 
 from opponent_tendencies.config import Settings
 from opponent_tendencies.llm.client import (
+    DEFAULT_BUFFERED_MAX_TOKENS,
     ArcLLMClient,
     LLMConnectionError,
     LLMMessage,
@@ -44,15 +45,24 @@ def completion(
     prompt_tokens: int = 11,
     completion_tokens: int = 7,
     with_usage: bool = True,
+    finish_reason: str = "stop",
+    reasoning: str | None = None,
+    reasoning_tokens: int = 0,
+    tool_calls: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    message: dict[str, Any] = {"role": "assistant", "content": content}
+    if reasoning is not None:
+        message["reasoning"] = reasoning
+    if tool_calls is not None:
+        message["tool_calls"] = tool_calls
     body: dict[str, Any] = {
         "id": "cmpl-1",
         "model": model,
         "choices": [
             {
                 "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop",
+                "message": message,
+                "finish_reason": finish_reason,
             }
         ],
     }
@@ -61,8 +71,59 @@ def completion(
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
+            "completion_tokens_details": {"reasoning_tokens": reasoning_tokens},
         }
     return body
+
+
+def sse(*events: dict[str, Any] | str) -> httpx.Response:
+    """Build a text/event-stream response from chat-completion chunks."""
+
+    lines = [event if isinstance(event, str) else json.dumps(event) for event in events]
+    body = "".join(f"data: {line}\n\n" for line in lines)
+    return httpx.Response(
+        200,
+        content=body.encode(),
+        headers={"content-type": "text/event-stream"},
+    )
+
+
+def chunk(
+    *,
+    content: str | None = None,
+    finish_reason: str | None = None,
+    reasoning: str | None = None,
+    model: str = "test-model",
+) -> dict[str, Any]:
+    delta: dict[str, Any] = {}
+    if content is not None:
+        delta["content"] = content
+    if reasoning is not None:
+        delta["reasoning_content"] = reasoning
+    return {
+        "id": "chatcmpl-1",
+        "model": model,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+    }
+
+
+def usage_chunk(
+    *,
+    prompt_tokens: int = 11,
+    completion_tokens: int = 7,
+    reasoning_tokens: int = 0,
+) -> dict[str, Any]:
+    return {
+        "id": "chatcmpl-1",
+        "model": "test-model",
+        "choices": [],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+            "completion_tokens_details": {"reasoning_tokens": reasoning_tokens},
+        },
+    }
 
 
 def make_client(
@@ -161,6 +222,7 @@ def test_chat_sends_openai_compatible_request() -> None:
     assert payload["temperature"] == 0.3
     assert payload["max_tokens"] == 99
     assert "response_format" not in payload
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
     assert response.content == "hi"
     assert response.model == "test-model"
@@ -168,6 +230,41 @@ def test_chat_sends_openai_compatible_request() -> None:
     assert response.usage == TokenUsage(prompt_tokens=11, completion_tokens=7)
     assert response.attempts == 1
     assert response.latency_seconds >= 0.0
+
+
+def test_chat_can_enable_provider_thinking() -> None:
+    client, requests = make_client(lambda request: ok("hi"), enable_thinking=True)
+    client.chat((LLMMessage(role="user", content="x"),))
+
+    (payload,) = requests
+    assert "chat_template_kwargs" not in payload
+
+
+def test_from_settings_reads_thinking_toggle() -> None:
+    settings = Settings.from_env(
+        {
+            "VT_ARC_BASE_URL": "http://settings.test/v1/",
+            "VT_ARC_API_KEY": "settings-key",
+            "VT_ARC_MODEL": "settings-model",
+            "EMBEDDING_MODEL": "embed",
+            "VT_ARC_ENABLE_THINKING": "true",
+        }
+    )
+    requests: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return ok("hi")
+
+    configured = ArcLLMClient.from_settings(
+        settings,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        retry_backoff_seconds=0.0,
+    )
+    configured.chat((LLMMessage(role="user", content="hello"),))
+
+    (payload,) = requests
+    assert "chat_template_kwargs" not in payload
 
 
 def test_chat_validates_messages_and_parameters() -> None:
@@ -245,6 +342,158 @@ def test_chat_transport_error_is_retried_then_raises() -> None:
     assert len(requests) == 3
 
 
+def test_chat_retries_transient_empty_content_then_succeeds() -> None:
+    responses = iter(
+        [
+            httpx.Response(200, json=completion("", finish_reason="stop")),
+            ok("recovered"),
+        ]
+    )
+    client, requests = make_client(lambda request: next(responses))
+
+    response = client.chat((LLMMessage(role="user", content="x"),))
+
+    assert response.content == "recovered"
+    assert response.attempts == 2
+    assert len(requests) == 2
+
+
+def test_chat_does_not_retry_truncated_empty_content() -> None:
+    body = completion(
+        "",
+        finish_reason="length",
+        completion_tokens=6144,
+        reasoning_tokens=6144,
+    )
+    client, requests = make_client(lambda request: httpx.Response(200, json=body))
+
+    with pytest.raises(
+        LLMResponseError,
+        match=r"finish_reason=length.*reasoning_tokens=6144",
+    ):
+        client.chat((LLMMessage(role="user", content="x"),))
+
+    assert len(requests) == 1
+
+
+def test_chat_streams_when_max_tokens_exceeds_buffered_cap() -> None:
+    body = sse(
+        chunk(content="{"),
+        chunk(content='"ok": true'),
+        chunk(content="}"),
+        chunk(finish_reason="stop"),
+        usage_chunk(prompt_tokens=21, completion_tokens=9, reasoning_tokens=2),
+        "[DONE]",
+    )
+    client, requests = make_client(lambda request: body)
+
+    response = client.chat(
+        (LLMMessage(role="user", content="x"),),
+        max_tokens=DEFAULT_BUFFERED_MAX_TOKENS + 1,
+    )
+
+    assert response.content == '{"ok": true}'
+    assert response.finish_reason == "stop"
+    assert response.usage == TokenUsage(prompt_tokens=21, completion_tokens=9, reasoning_tokens=2)
+    assert response.model == "test-model"
+
+    (payload,) = requests
+    assert payload["max_tokens"] == DEFAULT_BUFFERED_MAX_TOKENS + 1
+    assert payload["stream"] is True
+    assert payload["stream_options"] == {"include_usage": True}
+
+
+def test_chat_stays_buffered_at_or_below_the_cap() -> None:
+    client, requests = make_client(lambda request: ok("hi"))
+    client.chat((LLMMessage(role="user", content="x"),), max_tokens=DEFAULT_BUFFERED_MAX_TOKENS)
+
+    (payload,) = requests
+    assert "stream" not in payload
+    assert "stream_options" not in payload
+
+
+def test_chat_stream_can_be_forced_off_above_the_cap() -> None:
+    client, requests = make_client(lambda request: ok("hi"))
+    response = client.chat(
+        (LLMMessage(role="user", content="x"),),
+        max_tokens=DEFAULT_BUFFERED_MAX_TOKENS + 1,
+        stream=False,
+    )
+
+    assert response.content == "hi"
+    (payload,) = requests
+    assert "stream" not in payload
+
+
+def test_chat_accepts_buffered_json_when_gateway_ignores_stream() -> None:
+    client, requests = make_client(lambda request: ok("buffered"))
+
+    response = client.chat(
+        (LLMMessage(role="user", content="x"),),
+        max_tokens=DEFAULT_BUFFERED_MAX_TOKENS + 1,
+    )
+
+    assert response.content == "buffered"
+    assert requests[0]["stream"] is True
+
+
+def test_chat_streamed_truncated_empty_reply_is_not_retried() -> None:
+    body = sse(
+        chunk(finish_reason="length"),
+        usage_chunk(completion_tokens=16384, reasoning_tokens=16384),
+        "[DONE]",
+    )
+    client, requests = make_client(lambda request: body)
+
+    with pytest.raises(
+        LLMResponseError,
+        match=r"finish_reason=length.*reasoning_tokens=16384",
+    ):
+        client.chat((LLMMessage(role="user", content="x"),), max_tokens=16384)
+
+    assert len(requests) == 1
+
+
+def test_chat_streamed_error_status_is_reported() -> None:
+    client, requests = make_client(lambda request: httpx.Response(400, text="bad stream request"))
+
+    with pytest.raises(LLMResponseError, match="HTTP 400: bad stream request"):
+        client.chat((LLMMessage(role="user", content="x"),), max_tokens=16384)
+
+    assert len(requests) == 1
+
+
+def test_chat_rejects_malformed_stream_chunks() -> None:
+    body = sse("not-json", "[DONE]")
+    client, _ = make_client(lambda request: body)
+
+    with pytest.raises(LLMResponseError, match="stream returned malformed JSON"):
+        client.chat((LLMMessage(role="user", content="x"),), max_tokens=16384)
+
+
+def test_chat_streams_until_done_when_usage_chunk_is_absent() -> None:
+    body = sse(chunk(content="hi"), chunk(finish_reason="stop"), "[DONE]")
+    client, _ = make_client(lambda request: body)
+
+    response = client.chat((LLMMessage(role="user", content="x"),), max_tokens=16384)
+
+    assert response.content == "hi"
+    assert response.usage == TokenUsage()
+
+
+def test_chat_exhausts_retries_on_persistent_empty_content() -> None:
+    body = completion("", finish_reason="stop")
+    client, requests = make_client(
+        lambda request: httpx.Response(200, json=body),
+        max_retries=1,
+    )
+
+    with pytest.raises(LLMResponseError, match="no content after 2 attempts"):
+        client.chat((LLMMessage(role="user", content="x"),))
+
+    assert len(requests) == 2
+
+
 def test_chat_rejects_malformed_success_bodies() -> None:
     malformed = [
         httpx.Response(200, text="not json at all"),
@@ -265,7 +514,17 @@ def test_chat_defaults_missing_usage_to_zero() -> None:
     )
     response = client.chat((LLMMessage(role="user", content="x"),))
     assert response.usage == TokenUsage(prompt_tokens=0, completion_tokens=0)
+    assert response.usage.reasoning_tokens == 0
     assert response.model == "test-model"
+
+
+def test_chat_parses_reasoning_tokens() -> None:
+    client, _ = make_client(
+        lambda request: httpx.Response(200, json=completion("hi", reasoning_tokens=5))
+    )
+    response = client.chat((LLMMessage(role="user", content="x"),))
+    assert response.usage.reasoning_tokens == 5
+    assert response.usage.total_tokens == 18
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +585,33 @@ def test_complete_structured_parses_first_attempt() -> None:
     assert response_format["json_schema"]["name"] == "agent_response"
     assert response_format["json_schema"]["strict"] is True
     assert response_format["json_schema"]["schema"]["type"] == "object"
+
+
+def test_complete_structured_rejects_truncated_json_without_repair() -> None:
+    truncated = '{"tendencies": ['
+    client, requests = make_client(
+        lambda request: httpx.Response(200, json=completion(truncated, finish_reason="length"))
+    )
+
+    with pytest.raises(LLMResponseError, match="truncated at the completion limit"):
+        client.complete_structured((LLMMessage(role="user", content="go"),), "agent_response")
+
+    assert len(requests) == 1
+
+
+def test_complete_structured_repair_truncation_is_reported() -> None:
+    responses = iter(
+        [
+            ok("not json"),
+            httpx.Response(200, json=completion('{"tendencies": [', finish_reason="length")),
+        ]
+    )
+    client, requests = make_client(lambda request: next(responses))
+
+    with pytest.raises(LLMResponseError, match="truncated at the completion limit"):
+        client.complete_structured((LLMMessage(role="user", content="go"),), "agent_response")
+
+    assert len(requests) == 2
 
 
 def test_complete_structured_repairs_invalid_json_once() -> None:
@@ -407,5 +693,7 @@ def test_complete_structured_accepts_model_classes_and_rejects_unknowns() -> Non
 
 
 def test_token_usage_sums_across_calls() -> None:
-    assert TokenUsage(1, 2) + TokenUsage(3, 4) == TokenUsage(prompt_tokens=4, completion_tokens=6)
-    assert TokenUsage(1, 2).total_tokens == 3
+    assert TokenUsage(1, 2, 3) + TokenUsage(3, 4, 5) == TokenUsage(
+        prompt_tokens=4, completion_tokens=6, reasoning_tokens=8
+    )
+    assert TokenUsage(1, 2, 3).total_tokens == 3

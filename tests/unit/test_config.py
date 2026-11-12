@@ -54,6 +54,7 @@ def test_valid_environment_builds_immutable_settings() -> None:
     assert settings.vt_arc_base_url == "https://llm-api.arc.vt.edu/api/v1"
     assert settings.vt_arc_model == "vt-arc-llm"
     assert settings.embedding_model == "test-embedding-model"
+    assert settings.vt_arc_enable_thinking is False
     assert settings.data_dir == Path("data")
     assert settings.chroma_dir == Path("data/chroma")
     assert settings.vt_arc_api_key.get_secret_value() == "test-key"
@@ -73,6 +74,19 @@ def test_invalid_base_url_is_rejected() -> None:
 
     with pytest.raises(ConfigurationError, match="vt_arc_base_url"):
         Settings.from_env(env)
+
+
+def test_enable_thinking_flag_is_parsed_strictly() -> None:
+    for value in ("1", "true", "YES", "on"):
+        settings = Settings.from_env(dict(VALID_ENV, VT_ARC_ENABLE_THINKING=value))
+        assert settings.vt_arc_enable_thinking is True
+
+    for value in ("0", "false", "NO", "off"):
+        settings = Settings.from_env(dict(VALID_ENV, VT_ARC_ENABLE_THINKING=value))
+        assert settings.vt_arc_enable_thinking is False
+
+    with pytest.raises(ConfigurationError, match="VT_ARC_ENABLE_THINKING"):
+        Settings.from_env(dict(VALID_ENV, VT_ARC_ENABLE_THINKING="maybe"))
 
 
 def test_paths_from_environment_are_expanded() -> None:

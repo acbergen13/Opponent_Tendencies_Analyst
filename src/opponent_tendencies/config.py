@@ -27,6 +27,9 @@ REQUIRED_VARS: tuple[str, ...] = (
 DEFAULT_DATA_DIR = Path("data")
 DEFAULT_CHROMA_DIR = Path("data/chroma")
 
+_TRUE_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "on"})
+_FALSE_VALUES: frozenset[str] = frozenset({"0", "false", "no", "off"})
+
 
 class ConfigurationError(RuntimeError):
     """Raised when required configuration is missing or invalid."""
@@ -35,6 +38,20 @@ class ConfigurationError(RuntimeError):
 def _path_setting(raw: Mapping[str, str], name: str, default: Path) -> Path:
     value = raw.get(name, "").strip()
     return Path(value).expanduser() if value else default
+
+
+def _bool_setting(raw: Mapping[str, str], name: str, *, default: bool) -> bool:
+    """Parse an optional boolean environment variable strictly."""
+
+    value = raw.get(name, "").strip().lower()
+    if not value:
+        return default
+    if value in _TRUE_VALUES:
+        return True
+    if value in _FALSE_VALUES:
+        return False
+    accepted = ", ".join(sorted(_TRUE_VALUES | _FALSE_VALUES))
+    raise ConfigurationError(f"Invalid configuration: {name} must be one of {accepted}")
 
 
 def _missing_vars_message(missing: Sequence[str]) -> str:
@@ -59,6 +76,7 @@ class Settings(BaseModel):
     vt_arc_api_key: SecretStr
     vt_arc_model: str
     embedding_model: str
+    vt_arc_enable_thinking: bool = False
     data_dir: Path = DEFAULT_DATA_DIR
     chroma_dir: Path = DEFAULT_CHROMA_DIR
 
@@ -100,6 +118,7 @@ class Settings(BaseModel):
                 vt_arc_api_key=SecretStr(raw["VT_ARC_API_KEY"].strip()),
                 vt_arc_model=raw["VT_ARC_MODEL"].strip(),
                 embedding_model=raw["EMBEDDING_MODEL"].strip(),
+                vt_arc_enable_thinking=_bool_setting(raw, "VT_ARC_ENABLE_THINKING", default=False),
                 data_dir=_path_setting(raw, "DATA_DIR", DEFAULT_DATA_DIR),
                 chroma_dir=_path_setting(raw, "CHROMA_DIR", DEFAULT_CHROMA_DIR),
             )

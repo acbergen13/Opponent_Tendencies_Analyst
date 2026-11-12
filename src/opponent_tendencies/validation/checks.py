@@ -120,6 +120,13 @@ class CheckCode(StrEnum):
     STAT_TABLE_SUPPRESSED = "stat_table_suppressed"
     STAT_ROWS_SUPPRESSED = "stat_rows_suppressed"
 
+    AGENT_UNAVAILABLE = "agent_unavailable"
+    AGENT_TIMEOUT = "agent_timeout"
+    SYNTHESIS_UNGROUNDED_CLAIM = "synthesis_ungrounded_claim"
+    VERIFICATION_REMOVED_CLAIM = "verification_removed_claim"
+    VERIFICATION_CORRECTED_CLAIM = "verification_corrected_claim"
+    VERIFICATION_MISSING_VERDICT = "verification_missing_verdict"
+
     INVALID_RECORD = "invalid_record"
 
 
