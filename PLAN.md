@@ -3,7 +3,7 @@
 ## 0. Context
 
 - Source of truth: `docs/final_project_reqs_and_arch_zachary_and_adam.qmd` (requirements 1–30, issues 1–18, architecture, mitigations).
-- Stages 0–5 are implemented: packaging/config, frozen contracts, nflverse play-by-play ingestion, curated media ingestion plus a persistent Chroma index, the deterministic statistics engine, and the structured validation layer. `docs/` remains the graded deliverable; implementation code lives outside it.
+- Stages 0–6 are implemented: packaging/config, frozen contracts, nflverse play-by-play ingestion, curated media ingestion plus a persistent Chroma index, the deterministic statistics engine, the structured validation layer, and the LLM layer (VT ARC chat client, versioned constitutional prompts, offline prompt optimization). `docs/` remains the graded deliverable; implementation code lives outside it.
 - Environment: Python 3.13 in a local `.venv`; `chromadb`, `nflreadpy`, `streamlit`, `pydantic`, `pytest`, `httpx`, `ruff`, and `mypy` are pinned in `pyproject.toml` and verified on 3.13.
 - `PLAN.md` is engineering planning only. The assignment's no-AI note still applies to the written deliverable.
 
@@ -179,13 +179,19 @@ data/                           # gitignored: JSON stores, Chroma index, caches
     responses before they become evidence.
 - **Reqs:** 19, 21, 22, 24, 26, 27.
 
-### Stage 6 — LLM client, prompts, and offline prompt optimization
+### Stage 6 — LLM client, prompts, and offline prompt optimization ✅
 - Implement an OpenAI-compatible client for VT ARC using environment config; bounded retries, per-call timeout, latency/token logging, no secrets in logs.
 - Write narrow constitutional prompts for STA, BRA, CQA, SYN, verifier, and follow-up.
 - Use delimiters, provenance labels, and instruction hierarchy so retrieved text is data, not instructions.
 - Parse structured outputs with Pydantic; allow one bounded repair attempt on invalid output.
 - Add `scripts/optimize_prompts.py` for offline prompt optimization; store the selected prompt version and evaluation results. Do not run it at runtime.
 - **Exit:** mocked contract tests; invalid JSON triggers bounded repair; report records prompt version.
+- **Implementation notes:**
+  - `llm/client.py` owns every chat call: bounded retries (default 2) with capped exponential backoff over timeouts, transport errors, and HTTP 408/429/5xx; a per-call timeout; and logging that records only model, status, attempts, latency, and token counts — never prompts, completions, headers, or keys. `complete_structured` parses the Pydantic wire models from `llm/schemas.py` and allows exactly one repair attempt that quotes the validation errors back to the model; a second failure raises `StructuredOutputError`. JSON extraction tolerates markdown fences and surrounding prose without spending a repair.
+  - `llm/prompts/` holds six versioned constitutional prompts (statistics, beat_reporter, coach_quote, synthesis, verifier, follow_up). Each shares one operating-rules block — instruction hierarchy, grounding, no fabrication, exactly-one-JSON-object output, scope limits — plus agent-specific rules. `PROMPT_VERSION` (`2026.11.0`) is the single value stamped on agent outputs and reports (and feeds `report_id`), so any prompt edit requires bumping it deliberately. `Prompt.render` fails fast unless the caller supplies exactly the declared context keys.
+  - `llm/prompts/blocks.py` renders every data block deterministically: retrieval units are wrapped in `<retrieved_data source="untrusted">` with provenance attributes (publisher, author, title, url, week, speaker, …), stat tables render as `<deterministic_statistics>` ground truth, and `neutralize_tags` rewrites literal block tags inside untrusted text to Unicode look-alikes so injected text cannot close or open a data block.
+  - `llm/optimize.py` plus `scripts/optimize_prompts.py` implement offline prompt optimization: propose rewrites through the chat model, run deterministic constraint checks (data-block tags, JSON rule, instruction hierarchy, length bounds, stray placeholders), then a model ACCEPT/REJECT evaluation, and store results atomically under `DATA_DIR/prompt_optimization/results.json`. The runtime never imports it; an accepted rewrite is promoted by editing `llm/prompts/library.py` and bumping `PROMPT_VERSION`.
+  - All Stage 6 tests run on `httpx.MockTransport`; `pytest` never calls VT ARC.
 - **Reqs:** 10, 18, 23, 29.
 
 ### Stage 7 — Specialist agents
