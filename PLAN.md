@@ -3,7 +3,7 @@
 ## 0. Context
 
 - Source of truth: `docs/final_project_reqs_and_arch_zachary_and_adam.qmd` (requirements 1–30, issues 1–18, architecture, mitigations).
-- Stages 0–3 are implemented: packaging/config, frozen contracts, nflverse play-by-play ingestion, and curated media ingestion plus a persistent Chroma index. `docs/` remains the graded deliverable; implementation code lives outside it.
+- Stages 0–5 are implemented: packaging/config, frozen contracts, nflverse play-by-play ingestion, curated media ingestion plus a persistent Chroma index, the deterministic statistics engine, and the structured validation layer. `docs/` remains the graded deliverable; implementation code lives outside it.
 - Environment: Python 3.13 in a local `.venv`; `chromadb`, `nflreadpy`, `streamlit`, `pydantic`, `pytest`, `httpx`, `ruff`, and `mypy` are pinned in `pyproject.toml` and verified on 3.13.
 - `PLAN.md` is engineering planning only. The assignment's no-AI note still applies to the written deliverable.
 
@@ -117,21 +117,66 @@ data/                           # gitignored: JSON stores, Chroma index, caches
   - Retrieval requires opponent and season, then filters exact weeks or a week range plus source types/unit kinds before similarity search. Build with `python scripts/build_index.py --season 2026`.
 - **Reqs:** 6, 7, 8, 12, 13.
 
-### Stage 4 — Deterministic statistics engine
+### Stage 4 — Deterministic statistics engine ✅
 - Implement pure Python/pandas functions: run rate, pass rate, yards per play, third-down conversion; splits by down, distance bucket, and field position (including red zone/opponent territory).
 - Report `n` plays per split; suppress or flag splits below a minimum sample threshold.
 - Detect duplicate plays and missing values; explain gaps, never impute.
 - Add tendency-change comparison across week windows (req 15).
 - **Exit:** golden-file tests assert byte-identical tables for identical inputs; edge cases for empty/short samples.
+- **Implementation notes:**
+  - `stats/engine.py` is pure Python over the frozen `Play` contracts (no pandas): identical inputs produce byte-identical `StatsBundle.to_payload()` output, pinned by `tests/fixtures/stats_golden_2026_SEA.json` (regenerate deliberately with `UPDATE_GOLDEN=1 pytest tests/unit/test_stats_engine.py`).
+  - Populations are the selected opponent's offensive plays from the selected games: scrimmage plays drive run rate, pass rate, and yards per play; third-down attempts are scrimmage plays on third down with a recorded outcome, so flagged penalties, punts, and kneels never count as attempts.
+  - Splits: down 1–4, distance buckets 0–3 / 4–6 / 7+, field position red zone 0–20 / opponent territory 21–50 / own territory 51–100, and week. Fixed buckets always emit a row (an empty bucket says so explicitly); "Unknown" rows appear only when populated.
+  - Every row reports `n`; rows below `min_sample` (default 10) keep their value but are flagged `suppressed`, and a table is suppressed when its total is below `min_sample`.
+  - Missing values are never imputed: missing split keys land in explicit "Unknown" rows with a table note, missing `yards_gained` or third-down outcomes exclude the play from that metric with a note plus a `DataQuality` count, and duplicate `(game_id, play_id)` input raises.
+  - `compare_week_windows` requires disjoint windows drawn from the selected weeks and classifies each metric's direction with fixed thresholds (0.05 for rates, 0.5 for yards); below `min_sample` the comparison keeps its values but reports an `unknown` direction and is marked unreliable.
+  - Tables are sorted by `stat_table_id` and draw only on the selected weeks and games, so STA can attach them to its `AgentOutput` unchanged.
 - **Reqs:** 11, 15, 24.
 
-### Stage 5 — Validation layer
+### Stage 5 — Validation layer ✅
 - Check every game, play, media item, and quote ID resolves to stored source data.
 - Enforce opponent/week alignment; label earlier-2026 sources as background; reject prior seasons.
 - Validate schemas, duplicates, missing values, and retrieval results before any model sees them.
 - Flag weak evidence (small samples, missing sources) for human review.
 - Return structured errors/warnings rather than raising vague exceptions.
 - **Exit:** table-driven tests for each rejection and warning path.
+- **Implementation notes:**
+  - `validation/checks.py` exposes pure checks that each return a structured
+    `ValidationResult` instead of raising: `validate_selection`, `check_plays`,
+    `check_media_alignment`, `check_retrieval`, `check_evidence`,
+    `check_stat_tables`, and `check_records` (raw payload schema validation).
+    Issue codes are the `CheckCode` enum; nothing raises a vague exception.
+  - `validate_selection` requires every selected week to be a played
+    regular-season week containing a game for the opponent; duplicates,
+    out-of-range weeks, unplayed weeks, unknown opponents, and selections with
+    no opponent games are errors, while a selected week where the opponent is
+    idle is only informational.
+  - Week alignment treats a source inside the selection as aligned, an
+    earlier-2026 week as `media_background` (warning, labeled background),
+    a week after the selection as an error, a missing week as a warning, and
+    any other season as `media_prior_season` error. Media tied to a
+    `game_id` must resolve in the season store with a matching week.
+  - `check_plays` reports duplicate `(game_id, play_id)` keys as errors and
+    mirrors the stats engine's populations (opponent scrimmage plays from the
+    selected games) for missing-value notes, so gaps are explained, never
+    imputed. `check_stat_tables` reuses the engine's `DataQuality` counts and
+    flags suppressed tables/rows for human review; row flags are suppressed
+    when the whole table is already suppressed.
+  - `check_retrieval` validates retrieval results against the media store
+    before a model sees them: units must resolve to stored media for the
+    requested opponent/season, carry exact body spans (quote units reproduce
+    the quote verbatim), respect the background/later-week rule via the
+    stored week (not the unit's own metadata), and duplicate units,
+    non-finite scores, or unknown unit kinds are errors. Empty retrieval and
+    missing sources are `requires_human_review` warnings so the report says
+    what is missing (req 22).
+  - `check_evidence` resolves every `EvidenceRef` kind: play evidence must
+    resolve to stored games and plays, media/quote snippets must be exact
+    spans of stored text, quotes must still reproduce their span verbatim,
+    and stat evidence must resolve to a provided deterministic table.
+  - `check_records` turns `ValidationError`s into per-record
+    `invalid_record` issues with field paths, for validating raw data
+    responses before they become evidence.
 - **Reqs:** 19, 21, 22, 24, 26, 27.
 
 ### Stage 6 — LLM client, prompts, and offline prompt optimization

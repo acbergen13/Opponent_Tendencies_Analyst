@@ -8,12 +8,16 @@ Two things live here:
    "Opponent Tendencies Analyst"). This is the assignment artifact.
 2. **The implementation** described by `PLAN.md`: a Python package under
    `src/opponent_tendencies/` with a Streamlit app. Development proceeds stage
-   by stage in `PLAN.md` §4. Stages 0–3 are done: packaging/config, the frozen
+   by stage in `PLAN.md` §4. Stages 0–5 are done: packaging/config, the frozen
    Pydantic contracts in `models.py` with the LLM JSON schemas in
    `llm/schemas.py`, nflverse play-by-play ingestion into the atomic JSON store
-   at `data/seasons/<season>.json`, and curated media ingestion plus a
-   persistent Chroma index at `data/media/<season>.json` / `data/chroma`. Stats,
-   validation, agents, and UI are not implemented yet — do not assume modules
+   at `data/seasons/<season>.json`, curated media ingestion plus a
+   persistent Chroma index at `data/media/<season>.json` / `data/chroma`, the
+   deterministic statistics engine in `stats/engine.py`, and the structured
+   validation layer in `validation/checks.py` (pure checks returning
+   `ValidationResult`s — `CheckCode` issues for selection, plays, media
+   alignment, retrieval grounding, evidence resolution, stat tables, and raw
+   records). Agents and UI are not implemented yet — do not assume modules
    that the plan lists but the tree lacks.
 
 `docs/` is graded and separate from the app. Implementation code must live
@@ -71,3 +75,4 @@ generated `data/` / Chroma directories.
 - `data/media_ingest.py` enforces the source allowlist (publisher, HTTPS allowlisted domain, media type, trusted authors). Every quote must be an exact character span of its stored body. Corpus documents reject unknown fields, and media/quote IDs derive from `source_id` + URL and media/speaker/text/occurrence respectively; construct changed records by revalidation (`tests/media_fixtures.py` helpers), not `model_copy` alone.
 - `data/chunking.py` owns all chunk boundaries and IDs (`make_chunk_id`); defaults are 1200/200 characters and cuts prefer paragraphs, lines, sentences, then whitespace. `data/index.py` stores one cosine Chroma collection per season and records `model_id`, `schema_version`, `chunk_size`, `chunk_overlap`, `manifest_hash`, and `unit_count`. Any mismatch deletes and fully rebuilds the collection; retrieval requires opponent and season and filters weeks/source types/unit kinds in Chroma before similarity search.
 - Embeddings are pinned. `ArcEmbedder` uses `EMBEDDING_MODEL` (VT ARC `Qwen3-Embedding-4B`, 2560 dimensions, verified); `HashingEmbedder` (`local-hash-v1-<dimensions>`) is offline/test-only. A query embedder whose model ID differs from the stored index model is refused rather than mixing vector spaces. `tests/` and the default `pytest` run never call VT ARC; use `--embedder hashing` for an offline index build.
+- Stage 4 statistics in `stats/engine.py` are pure Python and byte-deterministic: bucket labels, row order, rounding, note wording, and the golden payload in `tests/fixtures/stats_golden_2026_SEA.json` are frozen. Changing any of them requires regenerating the golden with `UPDATE_GOLDEN=1 pytest tests/unit/test_stats_engine.py`. The engine analyzes one opponent's offense only, treats third-down attempts as scrimmage plays with a recorded outcome, and never imputes: missing split keys become explicit "Unknown" rows, missing yards/outcomes are excluded with notes, and duplicate play keys raise.
