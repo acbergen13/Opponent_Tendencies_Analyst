@@ -36,7 +36,7 @@ from opponent_tendencies.llm.prompts import (
     render_report_context,
 )
 from opponent_tendencies.llm.schemas import FollowUpResponse
-from opponent_tendencies.models import Report, Team
+from opponent_tendencies.models import AgentName, Report, SectionStatus, Team
 from opponent_tendencies.orchestrator import (
     DEFAULT_AGENT_TIMEOUT_SECONDS,
     DEFAULT_DEADLINE_SECONDS,
@@ -194,9 +194,19 @@ def build_report(
         token_budget=token_budget,
         on_progress=on_progress,
     )
-    if run.report is not None and report_cache is not None:
+    if run.report is not None and report_cache is not None and _cacheable(run.report):
         report_cache.store(run.report)
     return run
+
+
+def _cacheable(report: Report) -> bool:
+    """Cache only reports whose synthesis completed.
+
+    A synthesis or verification failure yields a deterministic fallback report;
+    caching it would keep serving the fallback after the endpoint recovers.
+    """
+
+    return report.status.agent_status.get(AgentName.SYNTHESIS) is SectionStatus.COMPLETED
 
 
 LiveRefresher = Callable[..., LiveMediaReport]

@@ -11,6 +11,8 @@ import pytest
 from pydantic import ValidationError
 
 from opponent_tendencies.llm.schemas import (
+    OVERVIEW_MAX_CHARS,
+    STATEMENT_MAX_CHARS,
     STRUCTURED_OUTPUT_MODELS,
     AgentResponse,
     ClaimVerdict,
@@ -172,3 +174,38 @@ def test_write_json_schemas_is_deterministic(tmp_path: Path) -> None:
 def test_unknown_schema_name_is_rejected() -> None:
     with pytest.raises(KeyError, match="unknown structured output"):
         json_schema_for("not_a_model")
+
+
+def test_synthesis_schema_bounds_every_list_and_string() -> None:
+    """Constrained decoding needs maxItems/maxLength to stop a runaway reply."""
+
+    schema = json_schema_for("synthesis_response")
+    properties = schema["properties"]
+    for name in ("tendencies", "observations", "agreements", "conflicts", "gaps", "weak_evidence"):
+        assert "maxItems" in properties[name], name
+    assert properties["overview"]["maxLength"] == OVERVIEW_MAX_CHARS
+    draft = schema["$defs"]["DraftTendency"]["properties"]
+    assert draft["statement"]["maxLength"] == STATEMENT_MAX_CHARS
+
+
+def test_synthesis_rejects_an_oversized_list() -> None:
+    finding = {
+        "statement": "Buffalo runs on early downs.",
+        "category": "scheme",
+        "evidence_ids": ["ev_1"],
+        "confidence": "medium",
+        "weeks": [5],
+        "treat_as_context": False,
+    }
+    document = {
+        "overview": "Short.",
+        "tendencies": [],
+        "observations": [finding] * 13,
+        "agreements": [],
+        "conflicts": [],
+        "gaps": [],
+        "weak_evidence": [],
+    }
+
+    with pytest.raises(ValidationError):
+        SynthesisResponse.model_validate(document)

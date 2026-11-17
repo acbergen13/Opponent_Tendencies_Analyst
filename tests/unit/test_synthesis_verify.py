@@ -24,6 +24,7 @@ from opponent_tendencies.data.media_store import MediaData
 from opponent_tendencies.data.play_store import SeasonData
 from opponent_tendencies.models import (
     AgentName,
+    Confidence,
     Observation,
     ObservationCategory,
     SectionStatus,
@@ -86,6 +87,17 @@ def _synthesis_payload(body: dict[str, Any], *, evidence: list[str] | None = Non
     }
 
 
+def _media_data() -> MediaData:
+    """The factories' media, all from the selected week, so citations stay in window."""
+
+    quote_media = make_quote_media()
+    return MediaData(
+        season=2026,
+        media=(make_media(), quote_media),
+        quotes=(make_quote(quote_media),),
+    )
+
+
 def _outputs(*, bra_status: SectionStatus = SectionStatus.COMPLETED) -> tuple[list[Any], Any]:
     sta, _, _, _, table = make_sta_output()
     bra, _ = make_bra_output(status=bra_status)
@@ -98,11 +110,11 @@ def _outputs(*, bra_status: SectionStatus = SectionStatus.COMPLETED) -> tuple[li
 # ---------------------------------------------------------------------------
 
 
-def test_synthesis_completion_budget_is_deliberate_headroom() -> None:
-    # Raised from 16,384 after a live run truncated at the cap
-    # (finish_reason=length); the consolidation rule keeps replies far below
-    # this budget, which exists as headroom, not as a target.
-    assert SYNTHESIS_MAX_TOKENS == 32768
+def test_synthesis_completion_budget_is_bounded() -> None:
+    # A live 2026-11-17 run spent a full 32,768-token cap on a degenerate reply.
+    # The wire schema now bounds every list and string, so the cap only needs
+    # headroom over a bounded reply; a larger cap would just prolong a runaway.
+    assert SYNTHESIS_MAX_TOKENS == 16384
 
 
 def test_synthesis_merges_validated_findings_and_stamps_ids() -> None:
@@ -123,6 +135,7 @@ def test_synthesis_merges_validated_findings_and_stamps_ids() -> None:
         games=[make_game()],
         agent_outputs=outputs,
         stat_tables=[table],
+        media_data=_media_data(),
     )
 
     assert requests
@@ -169,6 +182,7 @@ def test_synthesis_drops_invalid_agreements_and_reports_it() -> None:
         games=[make_game()],
         agent_outputs=outputs,
         stat_tables=[table],
+        media_data=_media_data(),
     )
     assert result.agreements == ()
     assert result.dropped == 1
@@ -215,6 +229,7 @@ def test_synthesis_conflict_positions_must_cite_evidence() -> None:
         games=[make_game()],
         agent_outputs=outputs,
         stat_tables=[table],
+        media_data=_media_data(),
     )
     assert result.conflicts == ()
     assert result.dropped >= 1
@@ -238,6 +253,7 @@ def test_synthesis_adds_an_explicit_gap_for_an_unavailable_agent() -> None:
         games=[make_game()],
         agent_outputs=outputs,
         stat_tables=[table],
+        media_data=_media_data(),
     )
     gaps = [gap for gap in result.gaps if AgentName.BEAT_REPORTER in gap.agents]
     assert gaps
@@ -262,6 +278,7 @@ def test_synthesis_flags_low_confidence_findings_for_human_review() -> None:
         games=[make_game()],
         agent_outputs=outputs,
         stat_tables=[table],
+        media_data=_media_data(),
     )
     assert result.tendencies[0].weak_evidence
     assert result.weak_evidence
@@ -280,6 +297,7 @@ def test_synthesis_rejects_wrong_agent_set() -> None:
             games=[make_game()],
             agent_outputs=outputs[:2],
             stat_tables=[table],
+            media_data=_media_data(),
         )
 
 
@@ -406,11 +424,9 @@ def test_unsupported_claim_is_removed_and_flagged() -> None:
     )
 
 
-def test_partially_supported_claim_is_corrected() -> None:
-    _, _, _, claim, document = _claims_and_verdict(
-        verdict="partially_supported",
-        correction="Buffalo runs on 45 percent of early downs.",
-    )
+def test_partially_supported_claim_keeps_its_wording_and_is_flagged_weak() -> None:
+    note = "The snippet supports early-down runs but not the 60 percent rate."
+    _, _, _, claim, document = _claims_and_verdict(verdict="partially_supported", correction=note)
     _, tendency, _, _, _ = make_sta_output()
     result = _run(document, claim)
     applied = apply_verification(
@@ -420,12 +436,22 @@ def test_partially_supported_claim_is_corrected() -> None:
         verdicts=result.by_claim_id(),
         weeks=[WEEK],
     )
+
     assert applied.corrected == 1
-    assert applied.tendencies[0].statement == "Buffalo runs on 45 percent of early downs."
-    assert applied.tendencies[0].finding_id != tendency.finding_id
-    assert any(
-        issue.code == CheckCode.VERIFICATION_CORRECTED_CLAIM.value for issue in applied.warnings
-    )
+    kept = applied.tendencies[0]
+    # The verifier's note is a critique, never published as the claim itself.
+    assert kept.statement == tendency.statement
+    assert kept.finding_id == tendency.finding_id
+    assert (kept.metric, kept.value) == (tendency.metric, tendency.value)
+    assert kept.weak_evidence is True
+    assert kept.confidence is not Confidence.HIGH
+    assert any(note in item.description for item in applied.weak_evidence)
+    warnings = [
+        issue
+        for issue in applied.warnings
+        if issue.code == CheckCode.VERIFICATION_PARTIAL_CLAIM.value
+    ]
+    assert [issue.subject_id for issue in warnings] == [kept.finding_id]
 
 
 def test_missing_verdict_removes_the_claim() -> None:

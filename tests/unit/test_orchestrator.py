@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 import pytest
 
+from opponent_tendencies.agents.synthesis import SYNTHESIS_TRUNCATION_RETRY
 from opponent_tendencies.data.play_store import SeasonData
 from opponent_tendencies.llm.prompts import PROMPT_VERSION
 from opponent_tendencies.models import (
@@ -485,3 +486,76 @@ def test_unsupported_claims_are_removed_before_the_report(tmp_path: Path) -> Non
     )
     assert run.verified is not None
     assert run.verified.removed == 2
+
+
+# ---------------------------------------------------------------------------
+# Synthesis and verification failures degrade instead of discarding the run
+# ---------------------------------------------------------------------------
+
+
+def test_synthesis_failure_degrades_to_a_deterministic_fallback(tmp_path: Path) -> None:
+    run, _ = _run(tmp_path=tmp_path, handler=_routing_handler(fail=frozenset({"synthesis"})))
+
+    report = run.report
+    assert report is not None
+    assert run.status.state is RunState.DEGRADED
+    assert report.status.agent_status[AgentName.SYNTHESIS] is SectionStatus.FAILED
+    assert AgentName.SYNTHESIS in report.unavailable_sections
+    # The statistics and the specialists' verified findings survive.
+    assert report.stat_tables
+    assert report.tendencies
+    # Only the model can judge cross-agent agreement, so none is invented.
+    assert report.agreements == [] and report.conflicts == []
+    assert any(AgentName.SYNTHESIS in gap.agents for gap in report.gaps)
+    assert any(issue.code == CheckCode.SYNTHESIS_UNAVAILABLE.value for issue in report.warnings)
+    assert "Synthesis was unavailable" in report.overview
+
+
+def test_verification_failure_withholds_every_finding(tmp_path: Path) -> None:
+    run, _ = _run(tmp_path=tmp_path, handler=_routing_handler(fail=frozenset({"verifier"})))
+
+    report = run.report
+    assert report is not None
+    assert run.status.state is RunState.DEGRADED
+    assert report.status.agent_status[AgentName.SYNTHESIS] is SectionStatus.UNAVAILABLE
+    assert report.tendencies == [] and report.observations == []
+    assert report.weak_evidence
+    assert report.stat_tables
+    assert any(issue.code == CheckCode.VERIFICATION_UNAVAILABLE.value for issue in report.warnings)
+    assert "verification was unavailable" in report.overview.lower()
+
+
+def test_synthesis_deadline_is_still_a_hard_failure(tmp_path: Path) -> None:
+    run, _ = _run(
+        tmp_path=tmp_path,
+        handler=_routing_handler(delay={"synthesis": 0.3}),
+        deadline_seconds=0.2,
+    )
+
+    assert run.report is None
+    assert run.status.failure_reason is RunFailureReason.DEADLINE_EXCEEDED
+
+
+def test_truncated_synthesis_is_retried_once_with_a_tighter_limit(tmp_path: Path) -> None:
+    routed = _routing_handler()
+    synthesis_calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        text = _prompt(request)
+        if _classify(text) == "synthesis":
+            synthesis_calls.append(text)
+            if len(synthesis_calls) == 1:
+                truncated = json_completion({"overview": "x"})
+                truncated["choices"][0]["message"]["content"] = '{"overview": "Buffalo, Buffalo'
+                truncated["choices"][0]["finish_reason"] = "length"
+                return httpx.Response(200, json=truncated)
+        return routed(request)
+
+    run, requests = _run(tmp_path=tmp_path, handler=handler)
+
+    assert run.report is not None
+    assert run.status.state is RunState.COMPLETED
+    assert len(synthesis_calls) == 2
+    assert SYNTHESIS_TRUNCATION_RETRY in synthesis_calls[1]
+    assert SYNTHESIS_TRUNCATION_RETRY not in synthesis_calls[0]
+    assert run.llm_calls == len(requests) == 6

@@ -19,10 +19,11 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from pydantic import HttpUrl, ValidationError
 
+from opponent_tendencies.data.media_store import MediaData
 from opponent_tendencies.llm.client import LLMMessage, StructuredResult, TokenUsage
 from opponent_tendencies.llm.prompts import (
     get_prompt,
@@ -42,8 +43,10 @@ from opponent_tendencies.models import (
     AgentName,
     AgentOutput,
     Confidence,
+    EvidenceKind,
     EvidenceRef,
     Game,
+    MediaType,
     Observation,
     ObservationCategory,
     SectionStatus,
@@ -52,6 +55,9 @@ from opponent_tendencies.models import (
     Tendency,
     ValidationIssue,
 )
+
+if TYPE_CHECKING:
+    from opponent_tendencies.data.index import MediaIndex, RetrievedSource
 
 __all__ = [
     "AgentConversion",
@@ -63,8 +69,10 @@ __all__ = [
     "build_quote_evidence",
     "build_stat_evidence",
     "convert_agent_response",
+    "evidence_outside_weeks",
     "format_weeks",
     "prompt_context",
+    "retrieve_selected_first",
     "run_agent_prompt",
     "stat_evidence",
     "unavailable_output",
@@ -199,6 +207,81 @@ def build_quote_evidence(sources: Sequence[RetrievedText]) -> tuple[EvidenceRef,
     return _sorted_unique(refs)
 
 
+def retrieve_selected_first(
+    index: MediaIndex,
+    query: str,
+    *,
+    opponent: Team,
+    season: int,
+    weeks: Sequence[int],
+    source_types: Sequence[MediaType],
+    kinds: Sequence[Literal["chunk", "quote"]],
+    k: int,
+) -> tuple[RetrievedSource, ...]:
+    """Retrieve units from the selected weeks first, then backfill with background.
+
+    Earlier-week sources may still be shown as background context, but they
+    only fill slots the selected weeks could not, so they never crowd out
+    in-window reporting.
+    """
+
+    selected = tuple(sorted({int(week) for week in weeks}))
+    primary = index.retrieve(
+        query,
+        opponent=opponent,
+        season=season,
+        weeks=selected,
+        source_types=source_types,
+        kinds=kinds,
+        k=k,
+    )
+    if len(primary) >= k:
+        return primary
+    background = index.retrieve(
+        query,
+        opponent=opponent,
+        season=season,
+        max_week=max(selected),
+        source_types=source_types,
+        kinds=kinds,
+        k=k,
+    )
+    seen = {source.unit_id for source in primary}
+    extra = [source for source in background if source.unit_id not in seen]
+    return (*primary, *extra[: k - len(primary)])
+
+
+def evidence_outside_weeks(
+    evidence: Iterable[EvidenceRef],
+    media_data: MediaData,
+    weeks: Sequence[int],
+) -> frozenset[str]:
+    """Return the media/quote evidence IDs that cannot support the selected weeks.
+
+    A media item or quote from a week outside the selection is background, and
+    one with no recorded week cannot be aligned at all; neither may be the
+    only support for a finding about the selected weeks (requirement 26).
+    Statistic-table and play evidence is computed from the selected games, so
+    it is always in the window.
+    """
+
+    selected = {int(week) for week in weeks}
+    outside: set[str] = set()
+    for ref in evidence:
+        week: int | None
+        if ref.kind is EvidenceKind.QUOTE:
+            quote = media_data.quote_by_id(ref.quote_id or "")
+            week = quote.week if quote is not None else None
+        elif ref.kind is EvidenceKind.MEDIA:
+            item = media_data.media_by_id(ref.media_id or "")
+            week = item.week if item is not None else None
+        else:
+            continue
+        if week is None or week not in selected:
+            outside.add(ref.evidence_id)
+    return frozenset(outside)
+
+
 def _url(value: object) -> HttpUrl | None:
     if isinstance(value, str) and value.strip():
         return HttpUrl(value)
@@ -221,8 +304,13 @@ def run_agent_prompt(
     prompt_name: str,
     context: dict[str, str],
     max_tokens: int | None = None,
+    extra_messages: Sequence[LLMMessage] = (),
 ) -> StructuredResult[WireModel]:
-    """Render one prompt with deterministic blocks and request its schema."""
+    """Render one prompt with deterministic blocks and request its schema.
+
+    ``extra_messages`` are appended after the rendered prompt; they carry
+    deterministic, Python-authored instructions such as a retry constraint.
+    """
 
     prompt = get_prompt(prompt_name)
     missing = sorted(set(prompt.required_context) - set(context))
@@ -232,11 +320,10 @@ def run_agent_prompt(
             f"prompt {prompt_name!r} context mismatch: missing {missing}, unexpected {extra}"
         )
     rendered = prompt.render(**context)
+    messages = (*rendered.messages, *extra_messages)
     if max_tokens is None:
-        return client.complete_structured(rendered.messages, prompt.structured_output)
-    return client.complete_structured(
-        rendered.messages, prompt.structured_output, max_tokens=max_tokens
-    )
+        return client.complete_structured(messages, prompt.structured_output)
+    return client.complete_structured(messages, prompt.structured_output, max_tokens=max_tokens)
 
 
 def prompt_context(
@@ -276,6 +363,7 @@ class AgentConversion:
     tendencies: list[Tendency] = field(default_factory=list)
     observations: list[Observation] = field(default_factory=list)
     dropped: int = 0
+    out_of_window: int = 0
 
 
 def convert_agent_response(
@@ -285,28 +373,49 @@ def convert_agent_response(
     catalog: Sequence[EvidenceRef],
     weeks: Sequence[int],
     weak_evidence_ids: Iterable[str] = (),
+    out_of_window_ids: Iterable[str] = (),
 ) -> AgentConversion:
     """Turn wire drafts into frozen contracts, dropping ungrounded claims.
 
     A draft whose evidence IDs or weeks are not in the deterministic catalog is
     discarded and counted, never repaired by guesswork. Low confidence and any
     citation of a suppressed statistic table become explicit weak evidence.
+
+    ``out_of_window_ids`` are sources from outside the selected weeks (see
+    :func:`evidence_outside_weeks`). A tendency supported *only* by them is
+    dropped; an observation supported only by them is kept as weak, low
+    confidence background; any finding citing one alongside in-window evidence
+    is marked weak.
     """
 
     selected = {int(week) for week in weeks}
     allowed_evidence = {ref.evidence_id for ref in catalog}
     weak = set(weak_evidence_ids)
+    outside = set(out_of_window_ids)
     conversion = AgentConversion()
 
     for draft_tendency in response.tendencies:
-        tendency = _to_tendency(draft_tendency, allowed_evidence, selected, weak)
+        cited = set(draft_tendency.evidence_ids)
+        if outside and cited and cited <= outside and cited <= allowed_evidence:
+            conversion.out_of_window += 1
+            continue
+        tendency = _to_tendency(draft_tendency, allowed_evidence, selected, weak | outside)
         if tendency is None:
             conversion.dropped += 1
         else:
             conversion.tendencies.append(tendency)
 
     for draft_observation in response.observations:
-        observation = _to_observation(draft_observation, allowed_evidence, selected, weak, agent)
+        cited = set(draft_observation.evidence_ids)
+        background_only = bool(outside and cited and cited <= outside)
+        observation = _to_observation(
+            draft_observation,
+            allowed_evidence,
+            selected,
+            weak | outside,
+            agent,
+            background_only=background_only,
+        )
         if observation is None:
             conversion.dropped += 1
         else:
@@ -381,12 +490,18 @@ def _to_observation(
     selected: set[int],
     weak_ids: set[str],
     agent: AgentName,
+    *,
+    background_only: bool = False,
 ) -> Observation | None:
     evidence_ids = _evidence_ids(draft.evidence_ids, allowed_evidence)
     weeks = _weeks(draft.weeks, selected)
     if evidence_ids is None or weeks is None:
         return None
     is_weak = _weak(draft.confidence, evidence_ids, weak_ids)
+    confidence = _safe_confidence(draft.confidence, is_weak)
+    if background_only:
+        # Out-of-window sources are background only: never stronger than low.
+        confidence = Confidence.LOW
     treat_as_context = draft.treat_as_context
     if agent is AgentName.COACH_QUOTE and draft.category in {
         ObservationCategory.COACH_EXPLANATION,
@@ -401,7 +516,7 @@ def _to_observation(
             category=draft.category,
             evidence_ids=evidence_ids,
             weeks=weeks,
-            confidence=_safe_confidence(draft.confidence, is_weak),
+            confidence=confidence,
             weak_evidence=is_weak,
             treat_as_context=treat_as_context,
         )
@@ -435,6 +550,11 @@ def build_output(
         collected.append(
             f"Dropped {conversion.dropped} finding(s) that cited evidence or weeks "
             "outside the deterministic catalog."
+        )
+    if conversion.out_of_window:
+        collected.append(
+            f"Dropped {conversion.out_of_window} tendency(ies) supported only by sources "
+            "from outside the selected weeks; background sources cannot support tendencies."
         )
     if (
         status is SectionStatus.COMPLETED

@@ -9,6 +9,7 @@ evidence IDs, weeks, status, and every rejection.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -22,9 +23,22 @@ from opponent_tendencies.agents import (
     run_coach_quote_agent,
     run_statistics_agent,
 )
-from opponent_tendencies.agents.common import format_weeks
+from opponent_tendencies.agents.common import (
+    evidence_outside_weeks,
+    format_weeks,
+    retrieve_selected_first,
+    stat_evidence,
+)
 from opponent_tendencies.data.index import MediaIndex
-from opponent_tendencies.models import AgentName, SectionStatus, Team
+from opponent_tendencies.data.media_store import MediaData
+from opponent_tendencies.models import (
+    AgentName,
+    Confidence,
+    EvidenceRef,
+    MediaType,
+    SectionStatus,
+    Team,
+)
 from tests.agent_fixtures import (
     WEEKS,
     agent_payload,
@@ -36,6 +50,7 @@ from tests.agent_fixtures import (
     opponent_games,
     season_data,
     stats_bundle,
+    user_text,
 )
 
 SELECTED = list(WEEKS)
@@ -359,3 +374,136 @@ def test_coach_quote_agent_skips_the_model_without_quotes(tmp_path: Path) -> Non
     assert requests == []
     assert result.output.is_available
     assert any("No stored post-game coach quotes" in item for item in result.output.limitations)
+
+
+# ---------------------------------------------------------------------------
+# Week alignment: background sources cannot support tendencies (requirement 26)
+# ---------------------------------------------------------------------------
+
+_MEDIA_LOCATOR = re.compile(
+    r"^evidence: (?P<evidence_id>\S+) kind=media .*locator=media (?P<media_id>\S+)",
+    re.MULTILINE,
+)
+
+
+def _media_evidence(body: dict[str, Any], media: MediaData, *, in_window: bool) -> list[str]:
+    """Media evidence IDs in the prompt catalog, split by the stored item's week."""
+
+    selected = set(SELECTED)
+    found: list[str] = []
+    for match in _MEDIA_LOCATOR.finditer(user_text(body)):
+        item = media.media_by_id(match.group("media_id"))
+        inside = item is not None and item.week in selected
+        if inside == in_window:
+            found.append(match.group("evidence_id"))
+    return found
+
+
+def _run_bra(tmp_path: Path, choose: Any) -> Any:
+    media = media_data(tmp_path)
+    index = media_index(media)
+
+    def payload(body: dict[str, Any]) -> dict[str, object]:
+        return agent_payload(evidence_ids=choose(body, media), weeks=SELECTED, category="formation")
+
+    client, _ = make_client(_respond(payload))
+    return run_beat_reporter_agent(
+        client=client,
+        index=index,
+        media_data=media,
+        games=opponent_games(),
+        weeks=SELECTED,
+        opponent=Team.BUF,
+    ).output
+
+
+def test_tendency_supported_only_by_background_sources_is_dropped(tmp_path: Path) -> None:
+    output = _run_bra(
+        tmp_path,
+        lambda body, media: _media_evidence(body, media, in_window=False)[:1],
+    )
+
+    assert output.tendencies == []
+    assert any("outside the selected weeks" in item for item in output.limitations)
+    # The same citation may stand as background context, never stronger than low.
+    (observation,) = output.observations
+    assert observation.weak_evidence is True
+    assert observation.confidence is Confidence.LOW
+
+
+def test_mixing_background_and_in_window_sources_marks_the_finding_weak(tmp_path: Path) -> None:
+    def choose(body: dict[str, Any], media: MediaData) -> list[str]:
+        inside = _media_evidence(body, media, in_window=True)
+        outside = _media_evidence(body, media, in_window=False)
+        assert inside and outside, "the fixture corpus must offer both kinds"
+        return [inside[0], outside[0]]
+
+    output = _run_bra(tmp_path, choose)
+
+    (tendency,) = output.tendencies
+    assert tendency.weak_evidence is True
+    assert tendency.confidence is not Confidence.HIGH
+
+
+def test_in_window_sources_keep_their_confidence(tmp_path: Path) -> None:
+    output = _run_bra(
+        tmp_path,
+        lambda body, media: _media_evidence(body, media, in_window=True)[:1],
+    )
+
+    (tendency,) = output.tendencies
+    assert tendency.weak_evidence is False
+    assert tendency.confidence is Confidence.HIGH
+
+
+def test_evidence_outside_weeks_flags_earlier_and_undated_media(tmp_path: Path) -> None:
+    media = media_data(tmp_path)
+    buf = [item for item in media.media if item.opponent is Team.BUF]
+    refs = [EvidenceRef.for_media(item.media_id, label=item.title) for item in buf]
+    quotes = [quote for quote in media.quotes if quote.team is Team.BUF]
+    refs.extend(EvidenceRef.for_quote(quote.quote_id, label="quote") for quote in quotes)
+    refs.extend(stat_evidence(stats_bundle().tables))
+
+    outside = evidence_outside_weeks(refs, media, SELECTED)
+
+    by_id = {ref.evidence_id: ref for ref in refs}
+    for ref in refs:
+        if ref.media_id is not None and ref.kind.value == "media":
+            item = media.media_by_id(ref.media_id)
+            assert item is not None
+            expected = item.week is None or item.week not in SELECTED
+            assert (ref.evidence_id in outside) is expected, item.week
+    assert any(by_id[evidence_id].kind.value == "media" for evidence_id in outside)
+    assert all(by_id[evidence_id].kind.value != "stat" for evidence_id in outside)
+    assert all(
+        (EvidenceRef.for_quote(quote.quote_id, label="quote").evidence_id in outside)
+        is (quote.week not in SELECTED)
+        for quote in quotes
+    )
+
+
+def test_retrieval_fills_from_selected_weeks_before_background(tmp_path: Path) -> None:
+    media = media_data(tmp_path)
+    index = media_index(media)
+    in_window = [
+        item
+        for item in media.media
+        if item.opponent is Team.BUF
+        and item.week in SELECTED
+        and item.source_type.value != "coach_quote"
+    ]
+
+    sources = retrieve_selected_first(
+        index,
+        "Buffalo offense",
+        opponent=Team.BUF,
+        season=2026,
+        weeks=SELECTED,
+        source_types=(MediaType.ARTICLE, MediaType.FILM_BREAKDOWN),
+        kinds=("chunk",),
+        k=2,
+    )
+
+    assert in_window, "the fixture corpus must have in-window reporting"
+    assert len(sources) == 2
+    assert all(source.week in SELECTED for source in sources)

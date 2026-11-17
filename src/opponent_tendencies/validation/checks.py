@@ -123,8 +123,10 @@ class CheckCode(StrEnum):
     AGENT_UNAVAILABLE = "agent_unavailable"
     AGENT_TIMEOUT = "agent_timeout"
     SYNTHESIS_UNGROUNDED_CLAIM = "synthesis_ungrounded_claim"
+    SYNTHESIS_UNAVAILABLE = "synthesis_unavailable"
+    VERIFICATION_UNAVAILABLE = "verification_unavailable"
     VERIFICATION_REMOVED_CLAIM = "verification_removed_claim"
-    VERIFICATION_CORRECTED_CLAIM = "verification_corrected_claim"
+    VERIFICATION_PARTIAL_CLAIM = "verification_partial_claim"
     VERIFICATION_MISSING_VERDICT = "verification_missing_verdict"
 
     INVALID_RECORD = "invalid_record"

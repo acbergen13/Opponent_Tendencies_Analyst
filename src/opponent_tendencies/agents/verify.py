@@ -7,7 +7,10 @@ rewrite the report:
 
 * ``supported`` keeps a claim only when the verdict cites snippets attached to
   that claim.
-* ``partially_supported`` replaces the statement with the verifier's correction.
+* ``partially_supported`` keeps the original statement but marks it weak (at
+  most medium confidence) and records the verifier's note on what is
+  unsupported as a weak-evidence flag. The model-authored note is never
+  published as the claim itself.
 * ``unsupported``/``contradicted``/missing verdicts remove the claim and leave an
   explicit weak-evidence flag plus a warning for human review.
 """
@@ -30,6 +33,7 @@ from opponent_tendencies.llm.prompts import (
 from opponent_tendencies.llm.schemas import ClaimVerdict, VerifiedClaim, VerifierResponse
 from opponent_tendencies.models import (
     AgentFinding,
+    Confidence,
     EvidenceKind,
     EvidenceRef,
     Game,
@@ -51,6 +55,7 @@ __all__ = [
     "apply_verification",
     "build_verifier_claims",
     "run_verifier",
+    "withdraw_unverified",
 ]
 
 
@@ -210,8 +215,8 @@ def apply_verification(
             continue
 
         if verdict.verdict is ClaimVerdict.PARTIALLY_SUPPORTED:
-            replacement = verdict.correction
-            if replacement is None or not replacement.strip():
+            note = verdict.correction
+            if note is None or not note.strip():
                 removed += 1
                 warnings.append(
                     _warning(
@@ -224,15 +229,25 @@ def apply_verification(
                 weak.append(_removed_weak(finding, kind, selected, verdict.reason))
                 continue
             corrected += 1
+            adjusted = _mark_partial(finding)
             warnings.append(
                 _warning(
-                    CheckCode.VERIFICATION_CORRECTED_CLAIM,
-                    f"Corrected {kind} {finding.finding_id} using the verifier's "
-                    f"correction. Verifier reason: {verdict.reason}",
-                    finding.finding_id,
+                    CheckCode.VERIFICATION_PARTIAL_CLAIM,
+                    f"The verifier found {kind} {adjusted.finding_id} only partly supported; "
+                    f"it is kept as weak evidence for human review. Unsupported part: {note}",
+                    adjusted.finding_id,
                 )
             )
-            adjusted = _replace_statement(finding, replacement)
+            weak.append(
+                WeakEvidence(
+                    topic=f"Partially supported {kind}",
+                    description=f"{finding.statement} (verifier: {note})",
+                    reason=WeakEvidenceReason.UNVERIFIED_CLAIM,
+                    evidence_ids=list(finding.evidence_ids),
+                    weeks=list(finding.weeks),
+                    agent=None,
+                )
+            )
             if isinstance(adjusted, Tendency):
                 kept_tendencies.append(adjusted)
             elif isinstance(adjusted, Observation):
@@ -341,10 +356,56 @@ class _SnippetResolver:
         )
 
 
-def _replace_statement[T: AgentFinding](finding: T, statement: str) -> T:
+def withdraw_unverified(
+    *,
+    tendencies: Sequence[Tendency],
+    observations: Sequence[Observation],
+    weeks: Sequence[int],
+    reason: str,
+) -> VerifiedContent:
+    """Withhold every finding when the verification call itself failed.
+
+    Without verdicts no claim may be published as verified, so each finding
+    becomes a weak-evidence flag for human review and one warning records why.
+    """
+
+    selected = list(weeks)
+    findings: list[AgentFinding] = [*tendencies, *observations]
+    weak = [
+        _removed_weak(
+            finding,
+            "tendency" if isinstance(finding, Tendency) else "observation",
+            selected,
+            "verification unavailable",
+        )
+        for finding in findings
+    ]
+    warning = ValidationIssue(
+        code=CheckCode.VERIFICATION_UNAVAILABLE.value,
+        message=(
+            f"Claim verification failed, so {len(findings)} finding(s) were withheld "
+            f"instead of being published unverified: {reason}"
+        ),
+        severity=IssueSeverity.WARNING,
+        subject_kind="verification",
+        requires_human_review=True,
+    )
+    return VerifiedContent(
+        tendencies=(),
+        observations=(),
+        weak_evidence=tuple(weak),
+        warnings=(warning,),
+        removed=len(findings),
+    )
+
+
+def _mark_partial[T: AgentFinding](finding: T) -> T:
+    """Keep the claim's wording; flag it weak and cap its confidence."""
+
     data = finding.model_dump(mode="python")
-    data.pop("finding_id")
-    data["statement"] = statement
+    data["weak_evidence"] = True
+    if finding.confidence is Confidence.HIGH:
+        data["confidence"] = Confidence.MEDIUM
     return type(finding).model_validate(data)
 
 

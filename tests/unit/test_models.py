@@ -18,6 +18,7 @@ from opponent_tendencies.models import (
     IssueSeverity,
     Observation,
     ObservationCategory,
+    Report,
     RunFailureReason,
     RunState,
     RunStatus,
@@ -481,3 +482,47 @@ def test_game_helpers_resolve_the_opponent() -> None:
 
     with pytest.raises(ValueError):
         game.opponent_of(Team.NYJ)
+
+
+def _with_synthesis_status(
+    report: Report, synthesis: SectionStatus, state: RunState
+) -> dict[str, Any]:
+    data: dict[str, Any] = report.model_dump()
+    agent_status = dict(report.status.agent_status)
+    agent_status[AgentName.SYNTHESIS] = synthesis
+    data["status"] = report.status.model_copy(
+        update={"state": state, "agent_status": agent_status}
+    ).model_dump()
+    return data
+
+
+@pytest.mark.parametrize(
+    "synthesis",
+    [SectionStatus.FAILED, SectionStatus.TIMED_OUT, SectionStatus.UNAVAILABLE],
+)
+def test_report_with_fallback_synthesis_is_degraded(synthesis: SectionStatus) -> None:
+    report = make_report()
+
+    degraded = type(report).model_validate(
+        _with_synthesis_status(report, synthesis, RunState.DEGRADED)
+    )
+
+    assert degraded.is_partial
+    assert degraded.unavailable_sections == (AgentName.SYNTHESIS,)
+
+
+def test_report_rejects_a_completed_state_without_synthesis() -> None:
+    report = make_report()
+
+    with pytest.raises(ValidationError):
+        type(report).model_validate(
+            _with_synthesis_status(report, SectionStatus.FAILED, RunState.COMPLETED)
+        )
+
+
+@pytest.mark.parametrize("synthesis", [SectionStatus.PENDING, SectionStatus.RUNNING])
+def test_report_rejects_unfinished_synthesis(synthesis: SectionStatus) -> None:
+    report = make_report()
+
+    with pytest.raises(ValidationError, match="synthesis must complete"):
+        type(report).model_validate(_with_synthesis_status(report, synthesis, RunState.DEGRADED))

@@ -250,3 +250,31 @@ def test_stats_only_reports_an_unplayable_selection(
     assert code == 1
     assert "not playable" in stderr.getvalue()
     assert stdout.getvalue() == ""
+
+
+def test_build_report_does_not_cache_a_fallback_report(tmp_path: Path) -> None:
+    media = media_data(tmp_path)
+    cache_dir = tmp_path / "reports"
+
+    def build(handler: Any) -> Any:
+        client, requests = make_client(handler)
+        run = build_report(
+            opponent=Team.BUF,
+            weeks=[5, 6, 7, 8, 9],
+            season_data=sample_season_data(),
+            media_data=media,
+            index=media_index(media),
+            client=client,
+            cache_dir=cache_dir,
+        )
+        return run, requests
+
+    degraded, _ = build(_routing_handler(fail=frozenset({"synthesis"})))
+    assert degraded.report is not None and not degraded.cached
+    assert not list(cache_dir.glob("*.json"))
+
+    # The next build retries the model instead of serving the fallback.
+    recovered, requests = build(_routing_handler())
+    assert recovered.report is not None and not recovered.cached
+    assert requests
+    assert list(cache_dir.glob("*.json"))

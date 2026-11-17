@@ -181,15 +181,25 @@ quarto inspect docs/final_project_reqs_and_arch_zachary_and_adam.qmd  # config c
 - `agents/synthesis.py` and `agents/verify.py` keep their claims on the same
   deterministic split: synthesis drops ungrounded agreements/conflicts/gaps with
   `SYNTHESIS_UNGROUNDED_CLAIM` and adds unavailable/low-confidence gaps itself;
-  verification keeps `supported` claims only with attached snippet IDs, replaces
-  the statement on `partially_supported`, and removes unsupported/contradicted/
-  missing-verdict claims with `WeakEvidence` + warnings. Never let synthesis
-  rewrite `StatTable`s.
+  verification keeps `supported` claims only with attached snippet IDs, keeps a
+  `partially_supported` claim's wording but marks it weak (≤ medium confidence)
+  with the verifier's note as `WeakEvidence` — never publish the note as the
+  claim — and removes unsupported/contradicted/missing-verdict claims with
+  `WeakEvidence` + warnings. Never let synthesis rewrite `StatTable`s.
+- Background sources cannot support tendencies: `evidence_outside_weeks` marks
+  media/quote evidence from outside the selected weeks (or undated), and
+  `convert_agent_response` drops a tendency citing only such evidence and marks
+  any finding citing one weak. BRA/CQA retrieve selected weeks first and only
+  backfill with background.
 - `orchestrator.run_report` is the only report entry point. It validates and
   computes stats once, runs STA/BRA/CQA concurrently, re-checks citations, and
-  stamps the `Report`. STA/synthesis/verification/validation/deadline/budget
-  failures are hard failures with no report; BRA/CQA failure or timeout degrades
-  to an explicit unavailable section with a warning and partial report. Timeouts
+  stamps the `Report`. STA/validation/configuration/deadline/budget failures are
+  hard failures with no report; BRA/CQA failure or timeout degrades to an
+  explicit unavailable section with a warning and partial report. A synthesis
+  failure uses `fallback_synthesis` (specialist findings unmerged, still
+  verified) and records SYN as `FAILED`/`TIMED_OUT`; a verification failure
+  withholds every finding as weak evidence and records SYN as `UNAVAILABLE`.
+  Both yield a `DEGRADED` report that is never cached. Timeouts
   are bounded `Future.result` waits (`shutdown(wait=False, cancel_futures=True)`);
   a worker that produces no result within its budget is the stall detector — it
   is abandoned and follows the same failure matrix, so no stage can wait forever.

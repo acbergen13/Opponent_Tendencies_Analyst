@@ -14,11 +14,23 @@ failure decision. The models only interpret the data they are given.
 
 Failure matrix (requirement 30):
 
-* A validation failure, an overall deadline/token-budget overrun, or a failure
-  in STA, synthesis, or verification is a **hard failure**: no report is built.
+* A validation failure, an overall deadline/token-budget overrun, a
+  configuration error, or a failure in STA is a **hard failure**: no report is
+  built.
 * A failure or timeout in BRA or CQA produces an explicit unavailable section,
   a warning for human review, and a **degraded** report that still carries the
   statistics and any section that completed.
+* A failure or per-stage timeout in synthesis is recorded as a failed SYN
+  section; :func:`fallback_synthesis` carries the specialists' validated
+  findings forward unmerged, they still go through verification, and the
+  report is **degraded**.
+* A failure or per-stage timeout in claim verification withholds every
+  tendency and observation (each becomes a weak-evidence flag), marks the SYN
+  section unavailable, and yields a **degraded** report with the statistics.
+  Unverified claims are never published.
+
+Degraded reports whose synthesis did not complete are not cached, so the next
+build retries the model instead of serving the fallback.
 
 Timeouts are enforced by waiting on each future for a bounded budget rather
 than by trusting a model to stop. A worker thread cannot be killed, so a timed
@@ -32,7 +44,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Final
 
@@ -42,13 +54,18 @@ from opponent_tendencies.agents.beat_reporter import run_beat_reporter_agent
 from opponent_tendencies.agents.coach_quote import run_coach_quote_agent
 from opponent_tendencies.agents.common import AgentResult, LLMCompleter, unavailable_output
 from opponent_tendencies.agents.statistics import run_statistics_agent
-from opponent_tendencies.agents.synthesis import SynthesisResult, run_synthesis_agent
+from opponent_tendencies.agents.synthesis import (
+    SynthesisResult,
+    fallback_synthesis,
+    run_synthesis_agent,
+)
 from opponent_tendencies.agents.verify import (
     VerificationResult,
     VerifiedContent,
     apply_verification,
     build_verifier_claims,
     run_verifier,
+    withdraw_unverified,
 )
 from opponent_tendencies.config import ConfigurationError
 from opponent_tendencies.data.index import MediaIndex
@@ -63,6 +80,8 @@ from opponent_tendencies.models import (
     EvidenceKind,
     EvidenceRef,
     Game,
+    Gap,
+    GapReason,
     IssueSeverity,
     Report,
     RunFailureReason,
@@ -97,8 +116,9 @@ __all__ = [
 
 DEFAULT_DEADLINE_SECONDS: Final = 600.0
 DEFAULT_AGENT_TIMEOUT_SECONDS: Final = 360.0
-# Three specialists + synthesis + verification, each allowed one repair call.
-DEFAULT_MAX_LLM_CALLS: Final = 10
+# Three specialists + synthesis + verification, each allowed one repair call,
+# plus one truncation retry (with its own repair) for synthesis.
+DEFAULT_MAX_LLM_CALLS: Final = 12
 DEFAULT_TOKEN_BUDGET: Final = 250_000
 
 ProgressCallback = Callable[["RunProgress"], None]
@@ -135,6 +155,7 @@ class ReportRun:
 class _StageFailure:
     reason: RunFailureReason
     message: str
+    timed_out: bool = False
 
 
 @dataclass(frozen=True)
@@ -436,6 +457,7 @@ def _execute(
             games=games,
             agent_outputs=outputs,
             stat_tables=bundle.tables,
+            media_data=resolved_media,
             prompt_version=prompt_version,
         ),
         timeout_seconds=agent_timeout_seconds,
@@ -445,26 +467,42 @@ def _execute(
         on_error="Synthesis failed",
         failure_reason=RunFailureReason.SYNTHESIS_FAILED,
     )
-    if synthesis_call.failure is not None:
-        log.agent_status[AgentName.SYNTHESIS] = SectionStatus.FAILED
-        _notify(on_progress, "synthesis", SectionStatus.FAILED, agent=AgentName.SYNTHESIS)
-        return _failed(
-            synthesis_call.failure,
-            log=log,
-            started_at=started_at,
-            finished_at=now(),
-            deadline_seconds=deadline_seconds,
-            latency_seconds=tick() - started,
+    synthesis_failure = synthesis_call.failure
+    if synthesis_failure is not None:
+        failed_status = (
+            SectionStatus.TIMED_OUT if synthesis_failure.timed_out else SectionStatus.FAILED
         )
-    synthesis = synthesis_call.value
-    if synthesis is None:  # pragma: no cover - guarded by the failure branch
-        raise RuntimeError("synthesis returned neither a result nor a failure")
+        log.agent_status[AgentName.SYNTHESIS] = failed_status
+        _notify(on_progress, "synthesis", failed_status, agent=AgentName.SYNTHESIS)
+        if synthesis_failure.reason is not RunFailureReason.SYNTHESIS_FAILED:
+            # Deadline and configuration failures stay hard failures.
+            return _failed(
+                synthesis_failure,
+                log=log,
+                started_at=started_at,
+                finished_at=now(),
+                deadline_seconds=deadline_seconds,
+                latency_seconds=tick() - started,
+            )
+        synthesis = fallback_synthesis(
+            opponent=opponent,
+            weeks=selected_weeks,
+            games=games,
+            agent_outputs=outputs,
+            stat_tables=bundle.tables,
+            reason=synthesis_failure.message,
+        )
+    else:
+        called = synthesis_call.value
+        if called is None:  # pragma: no cover - guarded by the failure branch
+            raise RuntimeError("synthesis returned neither a result nor a failure")
+        synthesis = called
+        log.agent_status[AgentName.SYNTHESIS] = SectionStatus.COMPLETED
+        _notify(on_progress, "synthesis", SectionStatus.COMPLETED, agent=AgentName.SYNTHESIS)
     log.synthesis = synthesis
     log.usage += synthesis.usage
     log.llm_calls += synthesis.llm_calls
     log.warnings.extend(synthesis.warnings)
-    log.agent_status[AgentName.SYNTHESIS] = SectionStatus.COMPLETED
-    _notify(on_progress, "synthesis", SectionStatus.COMPLETED, agent=AgentName.SYNTHESIS)
 
     budget_failure = _budget_failure(
         log,
@@ -508,31 +546,49 @@ def _execute(
         on_error="Claim verification failed",
         failure_reason=RunFailureReason.VERIFICATION_FAILED,
     )
-    if verification_call.failure is not None:
+    verification_failure = verification_call.failure
+    verification: VerificationResult | None
+    if verification_failure is not None:
         _notify(on_progress, "verification", SectionStatus.FAILED)
-        return _failed(
-            verification_call.failure,
-            log=log,
-            started_at=started_at,
-            finished_at=now(),
-            deadline_seconds=deadline_seconds,
-            latency_seconds=tick() - started,
+        if verification_failure.reason is not RunFailureReason.VERIFICATION_FAILED:
+            # Deadline and configuration failures stay hard failures.
+            return _failed(
+                verification_failure,
+                log=log,
+                started_at=started_at,
+                finished_at=now(),
+                deadline_seconds=deadline_seconds,
+                latency_seconds=tick() - started,
+            )
+        verification = None
+        verified = withdraw_unverified(
+            tendencies=synthesis.tendencies,
+            observations=synthesis.observations,
+            weeks=selected_weeks,
+            reason=verification_failure.message,
         )
-    verification = verification_call.value
-    if verification is None:  # pragma: no cover - guarded by the failure branch
-        raise RuntimeError("verification returned neither a result nor a failure")
-    _notify(on_progress, "verification", SectionStatus.COMPLETED)
-    log.verification = verification
-    log.usage += verification.usage
-    log.llm_calls += verification.llm_calls
+        # Without verdicts the synthesized findings are withheld, so the SYN
+        # section is unavailable (a failed SYN keeps its failure status).
+        if log.agent_status.get(AgentName.SYNTHESIS) is SectionStatus.COMPLETED:
+            log.agent_status[AgentName.SYNTHESIS] = SectionStatus.UNAVAILABLE
+        synthesis = _without_unverified_prose(synthesis, opponent=opponent, weeks=selected_weeks)
+        log.synthesis = synthesis
+    else:
+        verification = verification_call.value
+        if verification is None:  # pragma: no cover - guarded by the failure branch
+            raise RuntimeError("verification returned neither a result nor a failure")
+        _notify(on_progress, "verification", SectionStatus.COMPLETED)
+        log.verification = verification
+        log.usage += verification.usage
+        log.llm_calls += verification.llm_calls
 
-    verified = apply_verification(
-        tendencies=synthesis.tendencies,
-        observations=synthesis.observations,
-        claims=claims,
-        verdicts=verification.by_claim_id(),
-        weeks=selected_weeks,
-    )
+        verified = apply_verification(
+            tendencies=synthesis.tendencies,
+            observations=synthesis.observations,
+            claims=claims,
+            verdicts=verification.by_claim_id(),
+            weeks=selected_weeks,
+        )
     log.verified = verified
     log.warnings.extend(verified.warnings)
 
@@ -579,7 +635,9 @@ def _execute(
 
     finished_at = now()
     agent_status = {output.agent: output.status for output in outputs}
-    agent_status[AgentName.SYNTHESIS] = SectionStatus.COMPLETED
+    agent_status[AgentName.SYNTHESIS] = log.agent_status.get(
+        AgentName.SYNTHESIS, SectionStatus.COMPLETED
+    )
     state = (
         RunState.COMPLETED
         if all(status is SectionStatus.COMPLETED for status in agent_status.values())
@@ -1070,9 +1128,10 @@ def _call_with_deadline[T](
                     _StageFailure(
                         RunFailureReason.DEADLINE_EXCEEDED,
                         "The run reached its overall deadline before this stage finished.",
+                        timed_out=True,
                     ),
                 )
-            return _Call(None, _StageFailure(failure_reason, on_timeout))
+            return _Call(None, _StageFailure(failure_reason, on_timeout, timed_out=True))
         except ConfigurationError as exc:
             return _Call(
                 None,
@@ -1085,6 +1144,40 @@ def _call_with_deadline[T](
             return _Call(None, _stage_failure(exc, on_error, failure_reason))
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _without_unverified_prose(
+    synthesis: SynthesisResult,
+    *,
+    opponent: Team,
+    weeks: Sequence[int],
+) -> SynthesisResult:
+    """Replace the model overview and add a gap once verification has failed.
+
+    The model overview summarizes findings that are now withheld, so a
+    deterministic overview replaces it.
+    """
+
+    verification_gap = Gap(
+        topic="Claim verification unavailable",
+        description=(
+            "The claim-verification step failed, so no tendencies or observations are "
+            "published; they are listed as weak evidence for human review."
+        ),
+        reason=GapReason.OTHER,
+        agents=[AgentName.SYNTHESIS],
+        weeks=list(weeks),
+    )
+    gaps = {gap.gap_id: gap for gap in (*synthesis.gaps, verification_gap)}
+    return replace(
+        synthesis,
+        overview=(
+            f"Claim verification was unavailable for this {opponent.value} report, so its "
+            "findings are withheld and listed as weak evidence. The deterministic statistics "
+            "below are unaffected."
+        ),
+        gaps=tuple(gaps[gap_id] for gap_id in sorted(gaps)),
+    )
 
 
 def _stage_failure(

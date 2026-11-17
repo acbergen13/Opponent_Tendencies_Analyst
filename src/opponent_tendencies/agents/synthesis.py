@@ -6,22 +6,30 @@ citations must exist, weeks must be selected, agreement agents must be
 specialists, conflict evidence must cover every position, and an unavailable
 agent always yields an explicit gap. Nothing the model returns can introduce a
 new fact or a new source.
+
+A reply truncated at the completion cap is retried once with a tighter,
+Python-authored size constraint. If synthesis still fails, the orchestrator
+calls :func:`fallback_synthesis`, which builds the same result shape
+deterministically from the specialists' validated findings, so a report is
+degraded rather than lost.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from opponent_tendencies.agents.common import (
     AgentConversion,
     LLMCompleter,
     build_stat_evidence,
     convert_agent_response,
+    evidence_outside_weeks,
     format_weeks,
     run_agent_prompt,
 )
-from opponent_tendencies.llm.client import TokenUsage
+from opponent_tendencies.data.media_store import MediaData
+from opponent_tendencies.llm.client import LLMMessage, LLMTruncationError, TokenUsage
 from opponent_tendencies.llm.prompts import (
     PROMPT_VERSION,
     render_agent_findings,
@@ -59,14 +67,32 @@ from opponent_tendencies.models import (
 )
 from opponent_tendencies.validation.checks import CheckCode
 
-__all__ = ["SYNTHESIS_MAX_TOKENS", "SynthesisResult", "run_synthesis_agent"]
+__all__ = [
+    "SYNTHESIS_MAX_TOKENS",
+    "SYNTHESIS_TRUNCATION_RETRY",
+    "SynthesisResult",
+    "fallback_synthesis",
+    "run_synthesis_agent",
+]
 
-# Synthesis consolidates the validated findings into report-level content and
-# is still the longest structured reply in the pipeline, so it gets roughly
-# four times a specialist's budget as headroom. The consolidation rule in the
-# synthesis prompt keeps typical replies far below this cap. Above the
-# endpoint's buffered cap the client switches to a streamed completion.
-SYNTHESIS_MAX_TOKENS = 32768
+# Synthesis is the longest structured reply in the pipeline, so it gets twice a
+# specialist's budget. The wire schema bounds every list and string, so a valid
+# reply is a few thousand tokens; reaching this cap means the generation
+# degenerated, and a larger cap would only make the runaway take longer (a live
+# 2026-11-17 run spent all of a 32,768 cap). Above the endpoint's buffered cap
+# the client switches to a streamed completion.
+SYNTHESIS_MAX_TOKENS = 16384
+
+# Appended (by Python, never by the model) when the first reply is truncated.
+SYNTHESIS_TRUNCATION_RETRY = (
+    "Your previous reply was cut off at the completion limit before the JSON "
+    "object closed. Reply again with a much shorter report: at most 6 tendencies, "
+    "6 observations, 4 agreements, 3 conflicts, 4 gaps, and 4 weak-evidence "
+    "items; one or two sentences per text field; an overview of at most three "
+    "sentences. Never repeat an entry. Return only the JSON object."
+)
+
+_FALLBACK_REASON_CHARS = 300
 
 
 @dataclass(frozen=True)
@@ -98,9 +124,14 @@ def run_synthesis_agent(
     games: Sequence[Game],
     agent_outputs: Sequence[AgentOutput],
     stat_tables: Sequence[StatTable],
+    media_data: MediaData,
     prompt_version: str = PROMPT_VERSION,
 ) -> SynthesisResult:
-    """Merge three specialist outputs into report-level, validated pieces."""
+    """Merge three specialist outputs into report-level, validated pieces.
+
+    ``media_data`` resolves the week of every media and quote citation, so a
+    synthesized tendency can never rest only on out-of-window sources.
+    """
 
     selected_weeks = tuple(sorted({int(week) for week in weeks}))
     _validate_inputs(
@@ -110,19 +141,41 @@ def run_synthesis_agent(
         agent_outputs=agent_outputs,
     )
     evidence = _evidence_catalog(agent_outputs, stat_tables)
-    result = run_agent_prompt(
-        client,
-        prompt_name="synthesis",
-        context={
-            "opponent": opponent.value,
-            "season": str(season),
-            "weeks": format_weeks(selected_weeks),
-            "agent_findings": render_agent_findings(agent_outputs),
-            "stat_tables": render_stat_tables(stat_tables),
-            "available_evidence": render_evidence_catalog(evidence),
-        },
-        max_tokens=SYNTHESIS_MAX_TOKENS,
-    )
+    context = {
+        "opponent": opponent.value,
+        "season": str(season),
+        "weeks": format_weeks(selected_weeks),
+        "agent_findings": render_agent_findings(agent_outputs),
+        "stat_tables": render_stat_tables(stat_tables),
+        "available_evidence": render_evidence_catalog(evidence),
+    }
+    try:
+        result = run_agent_prompt(
+            client,
+            prompt_name="synthesis",
+            context=context,
+            max_tokens=SYNTHESIS_MAX_TOKENS,
+        )
+    except LLMTruncationError as truncated:
+        try:
+            retried = run_agent_prompt(
+                client,
+                prompt_name="synthesis",
+                context=context,
+                max_tokens=SYNTHESIS_MAX_TOKENS,
+                extra_messages=(LLMMessage(role="user", content=SYNTHESIS_TRUNCATION_RETRY),),
+            )
+        except LLMTruncationError as again:
+            raise LLMTruncationError(
+                str(again),
+                usage=truncated.usage + again.usage,
+                llm_calls=truncated.llm_calls + again.llm_calls,
+            ) from again
+        result = replace(
+            retried,
+            usage=truncated.usage + retried.usage,
+            llm_calls=truncated.llm_calls + retried.llm_calls,
+        )
     if not isinstance(result.parsed, SynthesisResponse):
         raise TypeError(f"expected SynthesisResponse, got {type(result.parsed).__name__}")
     response = result.parsed
@@ -133,9 +186,10 @@ def run_synthesis_agent(
         agent=AgentName.SYNTHESIS,
         catalog=evidence,
         weeks=selected_weeks,
+        out_of_window_ids=evidence_outside_weeks(evidence, media_data, selected_weeks),
     )
     allowed = {item.evidence_id for item in evidence}
-    dropped = conversion.dropped
+    dropped = conversion.dropped + conversion.out_of_window
 
     agreements = _agreements(response.agreements, allowed, selected_weeks)
     conflicts, conflict_dropped = _conflicts(response.conflicts, allowed, selected_weeks)
@@ -178,6 +232,91 @@ def run_synthesis_agent(
         latency_seconds=result.latency_seconds,
         model=result.model,
         warnings=tuple(warnings),
+    )
+
+
+def fallback_synthesis(
+    *,
+    opponent: Team,
+    weeks: Sequence[int],
+    games: Sequence[Game],
+    agent_outputs: Sequence[AgentOutput],
+    stat_tables: Sequence[StatTable],
+    reason: str,
+) -> SynthesisResult:
+    """Build a deterministic synthesis result when the SYN call fails.
+
+    No model is called. The specialists' already-validated findings are
+    carried forward unmerged (deduplicated by finding ID), agreements and
+    conflicts are left empty because only the model can judge them, and an
+    explicit gap plus a warning record that synthesis was unavailable. The
+    findings still go through claim verification afterwards.
+    """
+
+    selected_weeks = tuple(sorted({int(week) for week in weeks}))
+    _validate_inputs(
+        opponent=opponent,
+        weeks=selected_weeks,
+        games=games,
+        agent_outputs=agent_outputs,
+    )
+    evidence = _evidence_catalog(agent_outputs, stat_tables)
+    ordered = sorted(agent_outputs, key=lambda output: SPECIALIST_AGENTS.index(output.agent))
+    conversion = AgentConversion(
+        tendencies=_dedupe(
+            [item for output in ordered for item in output.tendencies],
+            key=lambda item: item.finding_id,
+        ),
+        observations=_dedupe(
+            [item for output in ordered for item in output.observations],
+            key=lambda item: item.finding_id,
+        ),
+    )
+
+    summary = " ".join(reason.split())[:_FALLBACK_REASON_CHARS] or "unknown failure"
+    synthesis_gap = Gap(
+        topic="Synthesis unavailable",
+        description=(
+            "The synthesis step failed, so specialist findings are listed unmerged and no "
+            f"cross-agent agreements or conflicts were assessed ({summary})."
+        ),
+        reason=GapReason.AGENT_UNAVAILABLE,
+        agents=[AgentName.SYNTHESIS],
+        weeks=list(selected_weeks),
+    )
+    gaps = _dedupe(
+        [*_unavailable_gaps(agent_outputs, selected_weeks), synthesis_gap],
+        key=lambda gap: gap.gap_id,
+    )
+    weak = _dedupe(
+        _finding_weak_evidence(conversion, agent_outputs),
+        key=lambda item: item.weak_evidence_id,
+    )
+    available = [output.agent.value for output in ordered if output.is_available]
+    overview = (
+        f"Synthesis was unavailable for this {opponent.value} report (weeks "
+        f"{format_weeks(selected_weeks)}), so it lists the validated findings of "
+        f"{', '.join(available) or 'no specialist'} without cross-agent merging. "
+        "The deterministic statistics are unaffected; review the warnings before use."
+    )
+    return SynthesisResult(
+        overview=overview,
+        tendencies=tuple(conversion.tendencies),
+        observations=tuple(conversion.observations),
+        agreements=(),
+        conflicts=(),
+        gaps=tuple(sorted(gaps, key=lambda item: item.gap_id)),
+        weak_evidence=tuple(sorted(weak, key=lambda item: item.weak_evidence_id)),
+        evidence=evidence,
+        warnings=(
+            ValidationIssue(
+                code=CheckCode.SYNTHESIS_UNAVAILABLE.value,
+                message=(f"Synthesis failed and a deterministic fallback was used: {summary}"),
+                severity=IssueSeverity.WARNING,
+                subject_kind="synthesis",
+                requires_human_review=True,
+            ),
+        ),
     )
 
 

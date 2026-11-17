@@ -32,7 +32,7 @@ __all__ = [
     "template_placeholders",
 ]
 
-PROMPT_VERSION = "2026.11.1"
+PROMPT_VERSION = "2026.11.2"
 
 _PLACEHOLDER = re.compile(r"\$([_a-zA-Z][_a-zA-Z0-9]*)")
 

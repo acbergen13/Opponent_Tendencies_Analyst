@@ -24,9 +24,9 @@ import json
 from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Self
+from typing import Annotated, Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from opponent_tendencies.models import (
     AgentName,
@@ -41,6 +41,25 @@ from opponent_tendencies.models import (
     Week,
 )
 
+# Bounded free text for model-authored fields. Constrained decoding honors
+# ``maxLength``/``maxItems``, so a degenerate generation cannot grow one string
+# or one list until the completion cap truncates the whole reply (a live
+# 2026-11-17 synthesis hit 32,768 completion tokens with no reasoning). The
+# stored contracts in ``models.py`` stay unbounded; only the wire is capped.
+LABEL_MAX_CHARS = 120
+STATEMENT_MAX_CHARS = 600
+OVERVIEW_MAX_CHARS = 1500
+
+WireLabel = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=LABEL_MAX_CHARS)
+]
+WireText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=STATEMENT_MAX_CHARS)
+]
+WireOverview = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=OVERVIEW_MAX_CHARS)
+]
+
 
 class WireModel(BaseModel):
     """Strict base class for model-facing JSON payloads."""
@@ -49,19 +68,19 @@ class WireModel(BaseModel):
 
 
 class DraftTendency(WireModel):
-    statement: TrimmedStr
+    statement: WireText
     category: TendencyCategory
     direction: TendencyDirection
     evidence_ids: list[TrimmedStr] = Field(min_length=1)
     confidence: Confidence
     weeks: list[Week] = Field(min_length=1)
-    metric: TrimmedStr | None
+    metric: WireLabel | None
     value: float | None
-    comparison: TrimmedStr | None
+    comparison: WireLabel | None
 
 
 class DraftObservation(WireModel):
-    statement: TrimmedStr
+    statement: WireText
     category: ObservationCategory
     evidence_ids: list[TrimmedStr] = Field(min_length=1)
     confidence: Confidence
@@ -74,12 +93,12 @@ class AgentResponse(WireModel):
 
     tendencies: list[DraftTendency]
     observations: list[DraftObservation]
-    limitations: list[TrimmedStr]
+    limitations: list[WireText]
 
 
 class DraftAgreement(WireModel):
-    topic: TrimmedStr
-    statement: TrimmedStr
+    topic: WireLabel
+    statement: WireText
     agents: list[AgentName] = Field(min_length=2)
     evidence_ids: list[TrimmedStr] = Field(min_length=1)
     weeks: list[Week] = Field(min_length=1)
@@ -87,30 +106,30 @@ class DraftAgreement(WireModel):
 
 class DraftConflictPosition(WireModel):
     agent: AgentName
-    statement: TrimmedStr
+    statement: WireText
     evidence_ids: list[TrimmedStr] = Field(min_length=1)
 
 
 class DraftConflict(WireModel):
-    topic: TrimmedStr
-    description: TrimmedStr
+    topic: WireLabel
+    description: WireText
     positions: list[DraftConflictPosition] = Field(min_length=2)
     evidence_ids: list[TrimmedStr] = Field(min_length=1)
     weeks: list[Week] = Field(min_length=1)
-    resolution: TrimmedStr | None
+    resolution: WireText | None
 
 
 class DraftGap(WireModel):
-    topic: TrimmedStr
-    description: TrimmedStr
+    topic: WireLabel
+    description: WireText
     reason: GapReason
     agents: list[AgentName]
     weeks: list[Week] = Field(min_length=1)
 
 
 class DraftWeakEvidence(WireModel):
-    topic: TrimmedStr
-    description: TrimmedStr
+    topic: WireLabel
+    description: WireText
     reason: WeakEvidenceReason
     evidence_ids: list[TrimmedStr]
     weeks: list[Week] = Field(min_length=1)
@@ -118,15 +137,20 @@ class DraftWeakEvidence(WireModel):
 
 
 class SynthesisResponse(WireModel):
-    """SYN response body, before Python assigns IDs and validates citations."""
+    """SYN response body, before Python assigns IDs and validates citations.
 
-    overview: TrimmedStr
-    tendencies: list[DraftTendency]
-    observations: list[DraftObservation]
-    agreements: list[DraftAgreement]
-    conflicts: list[DraftConflict]
-    gaps: list[DraftGap]
-    weak_evidence: list[DraftWeakEvidence]
+    Every list and string is bounded in the schema so constrained decoding
+    cannot spin in an endless array or string until the completion cap
+    truncates the reply.
+    """
+
+    overview: WireOverview
+    tendencies: list[DraftTendency] = Field(max_length=12)
+    observations: list[DraftObservation] = Field(max_length=12)
+    agreements: list[DraftAgreement] = Field(max_length=10)
+    conflicts: list[DraftConflict] = Field(max_length=8)
+    gaps: list[DraftGap] = Field(max_length=10)
+    weak_evidence: list[DraftWeakEvidence] = Field(max_length=10)
 
 
 class ClaimVerdict(StrEnum):
@@ -139,9 +163,9 @@ class ClaimVerdict(StrEnum):
 class VerifiedClaim(WireModel):
     claim_id: TrimmedStr
     verdict: ClaimVerdict
-    reason: TrimmedStr
+    reason: WireText
     evidence_ids: list[TrimmedStr]
-    correction: TrimmedStr | None
+    correction: WireText | None
 
     @model_validator(mode="after")
     def _validate_verdict(self) -> Self:

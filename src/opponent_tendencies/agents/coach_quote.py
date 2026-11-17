@@ -17,8 +17,10 @@ from opponent_tendencies.agents.common import (
     build_output,
     build_quote_evidence,
     convert_agent_response,
+    evidence_outside_weeks,
     format_weeks,
     prompt_context,
+    retrieve_selected_first,
     run_agent_prompt,
     unavailable_output,
 )
@@ -59,11 +61,12 @@ def run_coach_quote_agent(
     selected_weeks = tuple(sorted({int(week) for week in weeks}))
     season = ordered_games[0].season
 
-    sources = index.retrieve(
+    sources = retrieve_selected_first(
+        index,
         coach_quote_query(opponent, selected_weeks),
         opponent=opponent,
         season=season,
-        max_week=max(selected_weeks),
+        weeks=selected_weeks,
         source_types=(MediaType.COACH_QUOTE, MediaType.ARTICLE, MediaType.FILM_BREAKDOWN),
         kinds=("quote",),
         k=k,
@@ -125,6 +128,7 @@ def run_coach_quote_agent(
         agent=AgentName.COACH_QUOTE,
         catalog=evidence,
         weeks=selected_weeks,
+        out_of_window_ids=evidence_outside_weeks(evidence, media_data, selected_weeks),
     )
     limitations = list(response.limitations)
     limitations.extend(_background_limitations(sources, selected_weeks))

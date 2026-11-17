@@ -61,6 +61,7 @@ MessageRole = Literal["system", "user", "assistant"]
 _FENCED_JSON = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 _MAX_VALIDATION_ERRORS = 5
 _ERROR_EXCERPT_CHARS = 200
+_TRUNCATION_TAIL_CHARS = 200
 
 REPAIR_INSTRUCTION = (
     "Your previous reply was not a valid response: it was not JSON or it failed "
@@ -84,6 +85,19 @@ class LLMTimeoutError(LLMConnectionError):
 
 class LLMResponseError(LLMClientError):
     """The endpoint answered with a non-retryable status or a malformed body."""
+
+
+class LLMTruncationError(LLMResponseError):
+    """A structured reply hit the completion cap (``finish_reason=length``).
+
+    ``usage`` and ``llm_calls`` cover every call spent before the truncation,
+    so callers can charge them to a budget and decide whether to retry.
+    """
+
+    def __init__(self, message: str, *, usage: TokenUsage, llm_calls: int) -> None:
+        super().__init__(message)
+        self.usage = usage
+        self.llm_calls = llm_calls
 
 
 class StructuredOutputError(LLMClientError):
@@ -436,7 +450,9 @@ class ArcLLMClient:
             parsed = _parse_structured(first.content, model_cls)
         except (ValueError, ValidationError) as first_error:
             if first.finish_reason == "length":
-                raise LLMResponseError(_truncation_message(first, max_tokens)) from first_error
+                raise _truncation_error(
+                    first, max_tokens, schema_name=schema_name, usage=first.usage, llm_calls=1
+                ) from first_error
             first_summary = _error_summary(first_error)
             logger.warning(
                 "structured_output_repair schema=%s first_error=%s",
@@ -461,8 +477,12 @@ class ArcLLMClient:
                 parsed = _parse_structured(repair.content, model_cls)
             except (ValueError, ValidationError) as second_error:
                 if repair.finish_reason == "length":
-                    raise LLMResponseError(
-                        _truncation_message(repair, max_tokens)
+                    raise _truncation_error(
+                        repair,
+                        max_tokens,
+                        schema_name=schema_name,
+                        usage=first.usage + repair.usage,
+                        llm_calls=2,
                     ) from second_error
                 raise StructuredOutputError(
                     f"structured output {schema_name!r} failed validation after one "
@@ -744,7 +764,36 @@ def _truncation_message(response: LLMResponse, max_tokens: int | None) -> str:
         "chat completion response was truncated at the completion limit "
         f"(finish_reason=length, completion_tokens={response.usage.completion_tokens}, "
         f"reasoning_tokens={response.usage.reasoning_tokens}, {cap}); "
-        "raise the completion cap or shorten the prompt"
+        "the reply did not finish; see the structured_output_truncated log for its tail"
+    )
+
+
+def _truncation_error(
+    response: LLMResponse,
+    max_tokens: int | None,
+    *,
+    schema_name: str,
+    usage: TokenUsage,
+    llm_calls: int,
+) -> LLMTruncationError:
+    """Log the truncated reply's length and tail, then build the error.
+
+    Only the tail of the *completion* is logged (never the prompt), which is
+    enough to tell a repetition loop from a whitespace loop or a long reply.
+    """
+
+    tail = response.content[-_TRUNCATION_TAIL_CHARS:]
+    logger.warning(
+        "structured_output_truncated schema=%s completion_chars=%d completion_tokens=%d "
+        "max_tokens=%s tail=%r",
+        schema_name,
+        len(response.content),
+        response.usage.completion_tokens,
+        max_tokens,
+        tail,
+    )
+    return LLMTruncationError(
+        _truncation_message(response, max_tokens), usage=usage, llm_calls=llm_calls
     )
 
 
@@ -806,6 +855,7 @@ __all__ = [
     "LLMResponse",
     "LLMResponseError",
     "LLMTimeoutError",
+    "LLMTruncationError",
     "MessageRole",
     "StructuredOutputError",
     "StructuredResult",

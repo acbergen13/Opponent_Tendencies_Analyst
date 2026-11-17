@@ -23,6 +23,7 @@ from opponent_tendencies.llm.client import (
     LLMMessage,
     LLMResponseError,
     LLMTimeoutError,
+    LLMTruncationError,
     StructuredOutputError,
     TokenUsage,
 )
@@ -697,3 +698,19 @@ def test_token_usage_sums_across_calls() -> None:
         prompt_tokens=4, completion_tokens=6, reasoning_tokens=8
     )
     assert TokenUsage(1, 2, 3).total_tokens == 3
+
+
+def test_truncation_error_carries_the_spent_usage() -> None:
+    responses = iter(
+        [
+            ok("not json"),
+            httpx.Response(200, json=completion('{"tendencies": [', finish_reason="length")),
+        ]
+    )
+    client, _ = make_client(lambda request: next(responses))
+
+    with pytest.raises(LLMTruncationError) as caught:
+        client.complete_structured((LLMMessage(role="user", content="go"),), "agent_response")
+
+    assert caught.value.llm_calls == 2
+    assert caught.value.usage.total_tokens > 0

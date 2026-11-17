@@ -1272,6 +1272,16 @@ class DataUsage(ContractModel):
         return self
 
 
+_REPORTABLE_SYNTHESIS_STATUSES: frozenset[SectionStatus] = frozenset(
+    {
+        SectionStatus.COMPLETED,
+        SectionStatus.FAILED,
+        SectionStatus.TIMED_OUT,
+        SectionStatus.UNAVAILABLE,
+    }
+)
+
+
 class Report(ContractModel):
     """The final evidence-backed report."""
 
@@ -1345,12 +1355,21 @@ class Report(ContractModel):
                     f"run status for {output.agent.value} does not match its output status"
                 )
 
-        if self.status.agent_status.get(AgentName.SYNTHESIS) is not SectionStatus.COMPLETED:
-            raise ValueError("synthesis must complete before a report is produced")
+        # Synthesis either completed or was explicitly recorded as failed, timed
+        # out, or unavailable (its findings withheld after a failed verification);
+        # the latter three produce a degraded report built by a deterministic
+        # fallback, never a silent gap.
+        synthesis_status = self.status.agent_status.get(AgentName.SYNTHESIS)
+        if synthesis_status not in _REPORTABLE_SYNTHESIS_STATUSES:
+            raise ValueError(
+                "synthesis must complete, or be recorded as failed or unavailable, "
+                "before a report is produced"
+            )
         degraded_outputs = [output for output in self.agent_outputs if not output.is_available]
-        if self.status.state is RunState.COMPLETED and degraded_outputs:
+        degraded = bool(degraded_outputs) or synthesis_status is not SectionStatus.COMPLETED
+        if self.status.state is RunState.COMPLETED and degraded:
             raise ValueError("a completed run cannot contain an unavailable section")
-        if self.status.state is RunState.DEGRADED and not degraded_outputs:
+        if self.status.state is RunState.DEGRADED and not degraded:
             raise ValueError("a degraded report must contain an unavailable section")
         statistics_output = next(
             output for output in self.agent_outputs if output.agent is AgentName.STATISTICS
@@ -1416,7 +1435,10 @@ class Report(ContractModel):
 
     @property
     def unavailable_sections(self) -> tuple[AgentName, ...]:
-        return tuple(output.agent for output in self.agent_outputs if not output.is_available)
+        sections = [output.agent for output in self.agent_outputs if not output.is_available]
+        if self.status.agent_status.get(AgentName.SYNTHESIS) is not SectionStatus.COMPLETED:
+            sections.append(AgentName.SYNTHESIS)
+        return tuple(sections)
 
     @property
     def human_review_required(self) -> bool:
