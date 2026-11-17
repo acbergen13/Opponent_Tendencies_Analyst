@@ -98,6 +98,13 @@ def _outputs(*, bra_status: SectionStatus = SectionStatus.COMPLETED) -> tuple[li
 # ---------------------------------------------------------------------------
 
 
+def test_synthesis_completion_budget_is_deliberate_headroom() -> None:
+    # Raised from 16,384 after a live run truncated at the cap
+    # (finish_reason=length); the consolidation rule keeps replies far below
+    # this budget, which exists as headroom, not as a target.
+    assert SYNTHESIS_MAX_TOKENS == 32768
+
+
 def test_synthesis_merges_validated_findings_and_stamps_ids() -> None:
     outputs, table = _outputs()
 

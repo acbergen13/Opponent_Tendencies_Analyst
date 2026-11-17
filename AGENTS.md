@@ -162,7 +162,7 @@ quarto inspect docs/final_project_reqs_and_arch_zachary_and_adam.qmd  # config c
   `StructuredOutputError`.
 - `llm/prompts/library.py` holds six prompts (`statistics`, `beat_reporter`,
   `coach_quote`, `synthesis`, `verifier`, `follow_up`) sharing one constitutional
-  operating-rules block and one `PROMPT_VERSION` (`2026.11.0`). The version is
+  operating-rules block and one `PROMPT_VERSION` (`2026.11.1`). The version is
   stamped on agent outputs/reports and feeds `report_id`, so bump it deliberately
   on any prompt edit. `Prompt.render` fails unless the caller supplies exactly the
   declared context keys, and only `llm/prompts/blocks.py` renders data blocks;

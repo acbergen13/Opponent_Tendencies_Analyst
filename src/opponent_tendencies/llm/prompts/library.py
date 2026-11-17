@@ -32,7 +32,7 @@ __all__ = [
     "template_placeholders",
 ]
 
-PROMPT_VERSION = "2026.11.0"
+PROMPT_VERSION = "2026.11.1"
 
 _PLACEHOLDER = re.compile(r"\$([_a-zA-Z][_a-zA-Z0-9]*)")
 
@@ -244,6 +244,19 @@ _SYN_SYSTEM = _constitution(
         (
             "Cite only evidence IDs listed in <available_evidence>; every item you "
             "return must cite at least one."
+        ),
+        (
+            "Consolidate rather than restate: merge findings from different agents "
+            "that describe the same behavior into one item citing the union of "
+            "their evidence, and return at most 12 tendencies and 12 observations "
+            "-- the best-supported, most decision-relevant ones. The specialists' "
+            "full findings are preserved outside your reply, so a smaller merged "
+            "report loses nothing."
+        ),
+        (
+            "Every list holds distinct points only: never repeat an entry, never "
+            "restate one finding as several items, and never pad a list to make "
+            "it longer."
         ),
         (
             "Report agreements only when at least two agents support the same "

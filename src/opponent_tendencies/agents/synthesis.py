@@ -61,10 +61,12 @@ from opponent_tendencies.validation.checks import CheckCode
 
 __all__ = ["SYNTHESIS_MAX_TOKENS", "SynthesisResult", "run_synthesis_agent"]
 
-# Synthesis restates every validated finding plus agreements, conflicts, gaps,
-# and weak-evidence flags, so it needs more room than a specialist. Above the
+# Synthesis consolidates the validated findings into report-level content and
+# is still the longest structured reply in the pipeline, so it gets roughly
+# four times a specialist's budget as headroom. The consolidation rule in the
+# synthesis prompt keeps typical replies far below this cap. Above the
 # endpoint's buffered cap the client switches to a streamed completion.
-SYNTHESIS_MAX_TOKENS = 16384
+SYNTHESIS_MAX_TOKENS = 32768
 
 
 @dataclass(frozen=True)

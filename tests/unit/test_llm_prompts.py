@@ -116,6 +116,20 @@ def test_render_fills_every_declared_placeholder(name: str) -> None:
     assert user_message.content == rendered.user
 
 
+def test_synthesis_prompt_requires_consolidation() -> None:
+    """The synthesis reply must stay bounded.
+
+    A live 2026 run (WSH, weeks 5-9) exhausted the 16,384-token completion cap
+    because synthesis restated every specialist finding, so the 2026.11.1
+    prompt requires consolidation instead of restatement.
+    """
+
+    lowered = get_prompt("synthesis").system.lower()
+    assert "consolidate rather than restate" in lowered
+    assert "at most 12 tendencies and 12 observations" in lowered
+    assert "never repeat an entry" in lowered
+
+
 def test_render_requires_exact_context() -> None:
     prompt = get_prompt("verifier")
     complete = {"opponent": "BUF", "weeks": "9", "claims": "<claims/>"}
