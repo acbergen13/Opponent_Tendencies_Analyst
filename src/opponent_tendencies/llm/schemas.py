@@ -33,6 +33,7 @@ from opponent_tendencies.models import (
     Confidence,
     GapReason,
     ObservationCategory,
+    SpeakerRole,
     TendencyCategory,
     TendencyDirection,
     TrimmedStr,
@@ -175,11 +176,26 @@ class FollowUpResponse(WireModel):
         return self
 
 
+class ExtractedQuote(WireModel):
+    """One candidate coach quote; Python verifies it is verbatim in the article."""
+
+    speaker: TrimmedStr
+    speaker_role: SpeakerRole
+    text: TrimmedStr
+
+
+class QuoteExtractionResponse(WireModel):
+    """Candidate quotes proposed from one live article (never trusted unverified)."""
+
+    quotes: list[ExtractedQuote]
+
+
 STRUCTURED_OUTPUT_MODELS: Mapping[str, type[WireModel]] = {
     "agent_response": AgentResponse,
     "synthesis_response": SynthesisResponse,
     "verifier_response": VerifierResponse,
     "follow_up_response": FollowUpResponse,
+    "quote_extraction_response": QuoteExtractionResponse,
 }
 
 _SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
@@ -236,7 +252,9 @@ __all__ = (
     "DraftObservation",
     "DraftTendency",
     "DraftWeakEvidence",
+    "ExtractedQuote",
     "FollowUpResponse",
+    "QuoteExtractionResponse",
     "SynthesisResponse",
     "VerifiedClaim",
     "VerifierResponse",

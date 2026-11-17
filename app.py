@@ -15,8 +15,9 @@ import streamlit as st
 from opponent_tendencies.config import ConfigurationError, get_settings
 from opponent_tendencies.data.play_store import SeasonStore
 from opponent_tendencies.llm.client import ArcLLMClient
-from opponent_tendencies.models import TEAM_DISPLAY_NAMES, Team
+from opponent_tendencies.models import TEAM_DISPLAY_NAMES, Report, Team
 from opponent_tendencies.orchestrator import RunProgress
+from opponent_tendencies.ui.pdf_export import build_report_pdf, report_pdf_filename
 from opponent_tendencies.ui.render import (
     render_failure,
     render_follow_up,
@@ -182,6 +183,7 @@ def _render_stored_report() -> None:
     if report is not None:
         st.divider()
         render_report(report)
+        _render_pdf_export(report)
         run = st.session_state.get("last_run")
         if run is not None:
             cached = " · cache hit" if run.cached else ""
@@ -194,6 +196,26 @@ def _render_stored_report() -> None:
     if run is not None:
         st.divider()
         render_failure(run)
+
+
+def _render_pdf_export(report: Report) -> None:
+    """Offer the finished report as a PDF; only called once a report exists."""
+
+    cache = st.session_state.get("pdf_export")
+    if not cache or cache[0] != report.report_id:
+        try:
+            cache = (report.report_id, build_report_pdf(report))
+        except Exception as exc:
+            st.error(f"PDF export failed: {exc}")
+            return
+        st.session_state["pdf_export"] = cache
+    st.download_button(
+        "Export to PDF",
+        data=cache[1],
+        file_name=report_pdf_filename(report),
+        mime="application/pdf",
+        key="export_pdf",
+    )
 
 
 def _render_follow_up() -> None:

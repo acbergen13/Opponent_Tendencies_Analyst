@@ -14,6 +14,8 @@ fixtures and an ``httpx.MockTransport`` client.
 
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +25,7 @@ from opponent_tendencies.agents.common import LLMCompleter
 from opponent_tendencies.cache import ReportCache, cache_key
 from opponent_tendencies.config import Settings, get_settings
 from opponent_tendencies.data.index import MediaIndex
+from opponent_tendencies.data.live_media import LiveMediaReport, refresh_live_media
 from opponent_tendencies.data.media_store import MediaData, MediaStore
 from opponent_tendencies.data.play_store import SeasonData, SeasonStore
 from opponent_tendencies.llm.client import ArcLLMClient, TokenUsage
@@ -59,6 +62,8 @@ __all__ = [
 ]
 
 DEFAULT_SEASON = 2026
+
+_LOG = logging.getLogger(__name__)
 
 # Keep the follow-up prompt bounded no matter how long the conversation gets.
 MAX_FULL_TURNS = 3
@@ -116,6 +121,8 @@ def build_report(
     max_llm_calls: int = DEFAULT_MAX_LLM_CALLS,
     token_budget: int = DEFAULT_TOKEN_BUDGET,
     use_cache: bool = True,
+    live_media: bool | None = None,
+    live_refresher: LiveRefresher | None = None,
 ) -> ReportRun:
     """Load what was not injected and run the Stage 9 orchestrator.
 
@@ -135,9 +142,25 @@ def build_report(
         llm: LLMCompleter = ArcLLMClient.from_settings(settings)
     else:
         llm = client
+    if live_media is None:
+        # Live fetching is for real runs: tests/CLIs that inject a client stay offline.
+        live_media = client is None and os.environ.get("LIVE_MEDIA", "true").lower() != "false"
     media_index = index
-    if media_index is None and media.media and settings is not None:
+    if media_index is None and settings is not None:
         media_index = create_index(season, chroma_dir=chroma_dir, settings=settings)
+    if live_media:
+        media = _refresh_live_media(
+            opponent,
+            season=season,
+            data_dir=data_dir,
+            season_data=state,
+            media=media,
+            index=media_index,
+            client=llm,
+            refresher=live_refresher,
+        )
+    if media_index is not None and not media.media:
+        media_index = None
 
     revision = data_revision(state, media)
     report_cache = cache if use_cache else None
@@ -174,6 +197,37 @@ def build_report(
     if run.report is not None and report_cache is not None:
         report_cache.store(run.report)
     return run
+
+
+LiveRefresher = Callable[..., LiveMediaReport]
+
+
+def _refresh_live_media(
+    opponent: Team,
+    *,
+    season: int,
+    data_dir: Path | None,
+    season_data: SeasonData,
+    media: MediaData,
+    index: MediaIndex | None,
+    client: LLMCompleter,
+    refresher: LiveRefresher | None,
+) -> MediaData:
+    """Pull current team media into the store and index; failures keep stored media."""
+
+    store = MediaStore(season, _media_path(season, data_dir))
+    refresh = refresher if refresher is not None else refresh_live_media
+    try:
+        report = refresh(opponent, season_data=season_data, store=store, client=client)
+        for error in report.errors:
+            _LOG.warning("live media skipped: %s", error)
+        updated = store.load() if report.changed else media
+        if index is not None and updated.media:
+            index.build(updated)  # reuses the collection unless the store changed
+        return updated
+    except Exception as exc:  # never let a flaky feed or index fail the report
+        _LOG.warning("live media refresh failed; using stored media: %s", exc)
+        return media
 
 
 @dataclass(frozen=True)

@@ -64,7 +64,7 @@ def run_coach_quote_agent(
         opponent=opponent,
         season=season,
         max_week=max(selected_weeks),
-        source_types=(MediaType.COACH_QUOTE,),
+        source_types=(MediaType.COACH_QUOTE, MediaType.ARTICLE, MediaType.FILM_BREAKDOWN),
         kinds=("quote",),
         k=k,
     )

@@ -223,3 +223,14 @@ quarto inspect docs/final_project_reqs_and_arch_zachary_and_adam.qmd  # config c
   `HashingEmbedder`; `--embedder arc` evaluates the pinned persistent index. A
   retrieval sample passes only when every returned unit validates and, when the
   store has matching sources, at least one unit is week-aligned.
+- `data/live_media.py` refreshes media for the selected team at report time
+  (`ui/runner.build_report`, on by default only when no client is injected; set
+  `LIVE_MEDIA=false` to disable). It reads league RSS feeds from allowlisted
+  publishers (`LIVE_SOURCES`, no author allowlist), keeps team-focused articles,
+  assigns the week of the team's latest game on/before publication, and has the
+  LLM *propose* coach quotes that Python keeps only if they are exact substrings
+  of the body. Stored articles are never refetched; a 3-hour per-team stamp
+  (`data/media/live_<season>.json`) skips repeat fetches. Live items are
+  `ARTICLE` media; CQA therefore retrieves `kind="quote"` units from all media
+  types. Failures log a warning and fall back to stored media. Add team feeds in
+  `TEAM_FEEDS`.
