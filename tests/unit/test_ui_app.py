@@ -15,7 +15,7 @@ from opponent_tendencies.models import (
     Team,
 )
 from opponent_tendencies.orchestrator import ReportRun, RunProgress
-from opponent_tendencies.ui.runner import FollowUpAnswer
+from opponent_tendencies.ui.runner import DEFAULT_SEASON, FollowUpAnswer, load_season
 from tests.unit.factories import NOW, make_report
 
 
@@ -39,10 +39,12 @@ def test_selection_uses_alphabetical_teams_and_played_weeks_only() -> None:
     app = _app()
     app.run()
 
+    # The multiselect tracks whatever weeks the refreshed season store contains.
+    played = list(load_season(DEFAULT_SEASON).played_weeks)
     assert not app.exception
     assert app.selectbox[0].value == Team.ARI.value
-    assert [int(value) for value in app.multiselect[0].options] == list(range(1, 10))
-    assert app.multiselect[0].value == [6, 7, 8, 9]
+    assert [int(value) for value in app.multiselect[0].options] == played
+    assert app.multiselect[0].value == played[-4:]
 
 
 def test_selection_summary_lists_games_and_scores() -> None:
@@ -127,7 +129,8 @@ def test_build_report_stores_session_state_and_emits_progress() -> None:
     assert not app.exception
     assert app.session_state["report"] == report
     assert app.session_state["opponent"] is Team.ARI
-    assert app.session_state["weeks"] == [6, 7, 8, 9]
+    played = list(load_season(DEFAULT_SEASON).played_weeks)
+    assert app.session_state["weeks"] == played[-4:]
     assert app.session_state["evidence"] == report.evidence
     assert events
 

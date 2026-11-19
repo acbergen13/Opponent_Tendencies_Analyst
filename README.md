@@ -341,7 +341,7 @@ ACCEPT/REJECT evaluation, and writes results to
 | Synthesis agent + claim verification | ✅ Stage 8 |
 | Orchestrator and failure handling (`orchestrator.run_report`) | ✅ Stage 9 |
 | Full-report + stats-only CLI (`report_cli.py`, `scripts/report.py`) | ✅ Stage 9 |
-| Streamlit UI: selection, refresh, progress, report/failure rendering, session state, follow-up chat (`app.py`, `ui/`) | ✅ Stage 10 |
+| Streamlit UI: selection, refresh, progress, report/failure rendering, session state, follow-up chat, team-colored helmet/football graphics and chrome (`app.py`, `ui/`) | ✅ Stage 10 |
 | Content-addressed report cache (`cache.py`) and run telemetry | ✅ Stage 11 |
 | Consistency evaluation (`evaluation.py`, `scripts/eval_consistency.py`) | ✅ Stage 11 |
 | Chunking/retrieval evaluation (`retrieval_eval.py`, `scripts/eval_retrieval.py`) | ✅ Stage 11 |
@@ -402,6 +402,7 @@ UPDATE_GOLDEN=1 pytest tests/unit/test_stats_engine.py
 
 ```text
 app.py                              # Streamlit workflow: select -> build -> follow-up
+assets/football_helmet.svg          # Phosphor Icons duotone helmet (MIT), tinted per team
 corpus/media_2026.json              # curated, tracked Stage 3 input
 scripts/refresh_data.py             # nflverse -> data/seasons/<season>.json
 scripts/build_index.py              # corpus -> data/media/<season>.json + Chroma
@@ -564,3 +565,7 @@ implementation notes live beside each stage in §4. Remaining work is operationa
 rather than architectural: run the live consistency/retrieval checks with real
 credentials, refresh the 2026 data as the season progresses, and review the
 report with a human before using it.
+
+## Image credit
+
+Football helmet icon from Phosphor Icons, used under the MIT License.

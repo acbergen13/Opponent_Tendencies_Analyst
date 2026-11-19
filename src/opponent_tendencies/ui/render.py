@@ -14,11 +14,14 @@ import streamlit as st
 
 from opponent_tendencies.data.play_store import SeasonData
 from opponent_tendencies.models import (
+    TEAM_DISPLAY_NAMES,
     AgentName,
     EvidenceRef,
     Game,
     Report,
     RunFailureReason,
+    SplitDimension,
+    StatMetric,
     StatRow,
     StatTable,
     StatUnit,
@@ -27,9 +30,11 @@ from opponent_tendencies.models import (
     ValidationIssue,
 )
 from opponent_tendencies.orchestrator import ReportRun, RunProgress
+from opponent_tendencies.ui.graphics import football_svg, helmet_svg
 
 __all__ = [
     "agent_label",
+    "analyzed_scrimmage_plays",
     "format_finding_line",
     "format_stat_value",
     "render_failure",
@@ -84,11 +89,13 @@ def render_selection_summary(
 
     games = [game for game in season_data.games_for_weeks(weeks) if game.involves(opponent)]
     st.subheader("Selection")
-    columns = st.columns(4)
-    columns[0].metric("Opponent", opponent.value)
-    columns[1].metric("Weeks", ", ".join(str(week) for week in sorted(weeks)) or "—")
-    columns[2].metric("Games", str(len(games)))
-    columns[3].metric("Season", str(season_data.season))
+    helmet_col, weeks_col, games_col, season_col = st.columns([1.4, 2, 2, 2])
+    with helmet_col:
+        st.image(helmet_svg(opponent), width=110)
+        st.caption(f"{TEAM_DISPLAY_NAMES[opponent]} ({opponent.value})")
+    weeks_col.metric("Weeks", ", ".join(str(week) for week in sorted(weeks)) or "—")
+    games_col.metric("Games", str(len(games)))
+    season_col.metric("Season", str(season_data.season))
 
     if not games:
         st.info(
@@ -113,6 +120,7 @@ def render_report(report: Report) -> None:
             icon="⚠️",
         )
 
+    _render_masthead(report)
     st.subheader("Overview")
     st.write(report.overview)
     st.caption(
@@ -189,15 +197,42 @@ def _score(game: Game) -> str:
     return f"{game.away_team.value} {game.away_score} – {game.home_team.value} {game.home_score}"
 
 
+def analyzed_scrimmage_plays(report: Report) -> int | None:
+    """Return the scrimmage-play count behind the deterministic run-rate table."""
+
+    for table in report.stat_tables:
+        if table.metric is StatMetric.RUN_RATE and table.dimension is SplitDimension.OVERALL:
+            return table.n_plays
+    return None
+
+
+def _render_masthead(report: Report) -> None:
+    """Show the opponent's helmet and name as the report masthead."""
+
+    helmet_col, name_col = st.columns([1, 6])
+    with helmet_col:
+        st.image(helmet_svg(report.opponent), width=84)
+    with name_col:
+        st.markdown(f"### {TEAM_DISPLAY_NAMES[report.opponent]}")
+        st.caption("Opponent scouting report")
+
+
 def _render_data_used(report: Report) -> None:
     usage = report.data_used
+    figures: list[tuple[str, int]] = [
+        ("Games", usage.games),
+        ("Play-by-play records", usage.plays),
+        ("Media items", usage.media_items),
+        ("Quotes", usage.quotes),
+        ("Sources", len(usage.source_ids)),
+    ]
+    scrimmage = analyzed_scrimmage_plays(report)
+    if scrimmage is not None:
+        figures.insert(2, ("Analyzed scrimmage plays", scrimmage))
     st.subheader("Data used")
-    columns = st.columns(5)
-    columns[0].metric("Games", usage.games)
-    columns[1].metric("Plays", usage.plays)
-    columns[2].metric("Media items", usage.media_items)
-    columns[3].metric("Quotes", usage.quotes)
-    columns[4].metric("Sources", len(usage.source_ids))
+    columns = st.columns(len(figures))
+    for column, (label, value) in zip(columns, figures, strict=True):
+        column.metric(label, value)
     if usage.source_ids:
         st.caption("Sources: " + ", ".join(usage.source_ids))
 
@@ -238,18 +273,26 @@ def _render_findings(report: Report) -> None:
     if report.tendencies:
         st.subheader("Tendencies")
         for tendency in report.tendencies:
-            st.markdown(f"- {format_finding_line(tendency)}")
-            _render_citations(tendency.evidence_ids, evidence)
+            icon, body = st.columns([1, 30])
+            with icon:
+                st.image(football_svg(), width=20)
+            with body:
+                st.markdown(format_finding_line(tendency))
+                _render_citations(tendency.evidence_ids, evidence)
     if report.observations:
         st.subheader("Reporting and coach context")
         for observation in report.observations:
             context = " (coach context, not proof)" if observation.treat_as_context else ""
-            st.markdown(
-                f"- {observation.statement} "
-                f"({observation.confidence.value.lower()} confidence, "
-                f"{observation.category.value.replace('_', ' ')}{context})"
-            )
-            _render_citations(observation.evidence_ids, evidence)
+            icon, body = st.columns([1, 30])
+            with icon:
+                st.image(football_svg(), width=20)
+            with body:
+                st.markdown(
+                    f"{observation.statement} "
+                    f"({observation.confidence.value.lower()} confidence, "
+                    f"{observation.category.value.replace('_', ' ')}{context})"
+                )
+                _render_citations(observation.evidence_ids, evidence)
 
 
 def _render_citations(ids: Sequence[str], evidence: dict[str, EvidenceRef]) -> None:

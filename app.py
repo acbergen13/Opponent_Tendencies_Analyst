@@ -17,6 +17,7 @@ from opponent_tendencies.data.play_store import SeasonStore
 from opponent_tendencies.llm.client import ArcLLMClient
 from opponent_tendencies.models import TEAM_DISPLAY_NAMES, Report, Team
 from opponent_tendencies.orchestrator import RunProgress
+from opponent_tendencies.ui.graphics import football_svg, helmet_svg, team_theme_css
 from opponent_tendencies.ui.pdf_export import build_report_pdf, report_pdf_filename
 from opponent_tendencies.ui.render import (
     render_failure,
@@ -37,11 +38,7 @@ st.set_page_config(page_title="Opponent Tendencies Analyst", layout="wide")
 
 
 def main() -> None:
-    st.title("Opponent Tendencies Analyst")
-    st.caption(
-        "Deterministic NFL statistics with cited reporting and coach context. "
-        "The model interprets stored data; Python owns every number and source ID."
-    )
+    _render_header(_selected_opponent())
 
     season = int(st.session_state.get("season", DEFAULT_SEASON))
     data_dir = _path_setting("data_dir")
@@ -95,6 +92,39 @@ def main() -> None:
 
     st.divider()
     _render_follow_up()
+
+
+def _render_header(opponent: Team | None) -> None:
+    """Show the title with a football helmet and football mark beside it.
+
+    Once an opponent has been selected, the heading, Build Report button, and
+    accent borders pick up that team's colors. The helmet is the local Phosphor
+    Icons asset inlined and tinted with the same colors — no logos or external
+    requests.
+    """
+
+    if opponent is not None and st.get_option("theme.base") != "dark":
+        st.markdown(team_theme_css(opponent), unsafe_allow_html=True)
+    title_col, helmet_col, ball_col = st.columns([10, 1.8, 0.8], vertical_alignment="center")
+    title_col.title("Opponent Tendencies Analyst")
+    helmet_col.image(helmet_svg(opponent), width=120)
+    ball_col.image(football_svg(), width=32)
+    st.caption(
+        "Deterministic NFL statistics with cited reporting and coach context. "
+        "The model interprets stored data; Python owns every number and source ID."
+    )
+
+
+def _selected_opponent() -> Team | None:
+    """Return the opponent chosen on an earlier run, if any, for header theming."""
+
+    value = st.session_state.get("opponent_select")
+    if value is None:
+        return None
+    try:
+        return Team(value)
+    except ValueError:
+        return None
 
 
 def _render_data_sidebar(season: int, data_dir: Path | None) -> None:

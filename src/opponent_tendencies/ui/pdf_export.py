@@ -17,7 +17,7 @@ from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.pdfgen.canvas import Canvas
+from reportlab.pdfgen.canvas import FILL_NON_ZERO, Canvas
 from reportlab.platypus import (
     HRFlowable,
     KeepTogether,
@@ -43,7 +43,15 @@ from opponent_tendencies.models import (
     Tendency,
     ValidationIssue,
 )
-from opponent_tendencies.ui.render import agent_label, format_stat_value
+from opponent_tendencies.ui.graphics import (
+    FOOTBALL_VIEWBOX,
+    HELMET_VIEWBOX,
+    VectorPart,
+    football_parts,
+    helmet_parts,
+    team_accent,
+)
+from opponent_tendencies.ui.render import agent_label, analyzed_scrimmage_plays, format_stat_value
 
 __all__ = ["build_report_pdf", "report_pdf_filename"]
 
@@ -78,7 +86,8 @@ def build_report_pdf(report: Report) -> bytes:
         title=f"{team_name} Opponent Scouting Report",
         author="Opponent Tendencies Analyst",
     )
-    styles = _styles()
+    accent = colors.HexColor(team_accent(report.opponent))
+    styles = _styles(accent)
     refs = {item.evidence_id: number for number, item in enumerate(report.evidence, start=1)}
 
     story: list[Flowable] = []
@@ -87,7 +96,7 @@ def build_report_pdf(report: Report) -> bytes:
     story += _tendencies(report, styles, refs)
     story += _observations(report, styles, refs)
     story += _synthesis(report, styles)
-    story += _statistics(report, styles)
+    story += _statistics(report, styles, accent)
     story += _data_used(report, styles)
     story += _warnings(report, styles)
     story += _evidence_appendix(report, styles)
@@ -100,7 +109,7 @@ def build_report_pdf(report: Report) -> bytes:
 # --- styles ----------------------------------------------------------------
 
 
-def _styles() -> dict[str, ParagraphStyle]:
+def _styles(accent: colors.Color = _ACCENT) -> dict[str, ParagraphStyle]:
     base = getSampleStyleSheet()["Normal"]
     body = ParagraphStyle(
         "body", parent=base, fontName="Helvetica", fontSize=10, leading=14.5, textColor=_INK
@@ -113,7 +122,7 @@ def _styles() -> dict[str, ParagraphStyle]:
             fontName="Helvetica-Bold",
             fontSize=24,
             leading=28,
-            textColor=_ACCENT,
+            textColor=accent,
             spaceAfter=2,
         ),
         "subtitle": ParagraphStyle(
@@ -125,7 +134,7 @@ def _styles() -> dict[str, ParagraphStyle]:
             fontName="Helvetica-Bold",
             fontSize=14,
             leading=18,
-            textColor=_ACCENT,
+            textColor=accent,
             spaceBefore=16,
             spaceAfter=5,
             keepWithNext=1,
@@ -236,16 +245,119 @@ def _callout(text: str, style: ParagraphStyle) -> Table:
     return table
 
 
+# --- vector graphics -----------------------------------------------------------
+
+
+class _VectorGraphic(Flowable):
+    """Draw :class:`VectorPart` geometry (y-down view coordinates) on the canvas.
+
+    The geometry is shared with the Streamlit SVG rendering, so both surfaces
+    draw the same helmet and football shapes. Filling uses SVG's nonzero
+    winding rule, which the helmet outline needs for its enclosed holes.
+    """
+
+    def __init__(
+        self,
+        parts: Sequence[VectorPart],
+        viewbox: tuple[float, float],
+        width: float,
+    ) -> None:
+        super().__init__()
+        self._parts = tuple(parts)
+        self._viewbox = viewbox
+        self._width = width
+        self._height = width * viewbox[1] / viewbox[0]
+        self.width = width
+        self.height = self._height
+
+    def wrap(self, avail_width: float, avail_height: float) -> tuple[float, float]:
+        return (self._width, self._height)
+
+    def draw(self) -> None:
+        canvas = self.canv
+        scale = self._width / self._viewbox[0]
+        canvas.saveState()
+        for part in self._parts:
+            path = canvas.beginPath()
+            for op, coords in part.commands:
+                points = [
+                    value * scale if index % 2 == 0 else (self._viewbox[1] - value) * scale
+                    for index, value in enumerate(coords)
+                ]
+                if op == "M":
+                    path.moveTo(*points)
+                elif op == "L":
+                    path.lineTo(*points)
+                elif op == "C":
+                    path.curveTo(*points)
+                elif op == "Z":
+                    path.close()
+            if part.fill is not None:
+                canvas.setFillColor(colors.HexColor(part.fill))
+            if part.stroke is not None:
+                canvas.setStrokeColor(colors.HexColor(part.stroke))
+                canvas.setLineWidth(part.stroke_width * scale)
+                canvas.setLineCap(1)
+                canvas.setLineJoin(1)
+            canvas.drawPath(
+                path,
+                stroke=part.stroke is not None,
+                fill=part.fill is not None,
+                fillMode=FILL_NON_ZERO,
+            )
+        canvas.restoreState()
+
+
+def _crest(report: Report) -> Flowable:
+    """Stack the opponent's helmet over a football as the report's graphic mark."""
+
+    helmet = _VectorGraphic(helmet_parts(report.opponent), HELMET_VIEWBOX, 0.78 * inch)
+    ball = _VectorGraphic(football_parts(), FOOTBALL_VIEWBOX, 0.42 * inch)
+    stack = Table([[helmet], [ball]], colWidths=[1.05 * inch])
+    stack.setStyle(
+        TableStyle(
+            [
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]
+        )
+    )
+    return stack
+
+
 # --- sections ------------------------------------------------------------------
 
 
 def _header(report: Report, styles: dict[str, ParagraphStyle]) -> list[Flowable]:
     weeks = ", ".join(str(week) for week in report.weeks)
     games = report.games
-    flow: list[Flowable] = [
+    accent = colors.HexColor(team_accent(report.opponent))
+    titles = [
         _p(f"{TEAM_DISPLAY_NAMES[report.opponent]}", styles["title"]),
         _p("Opponent Scouting Report", styles["subtitle"]),
-        HRFlowable(width="100%", thickness=1.2, color=_ACCENT, spaceAfter=8),
+    ]
+    masthead = Table(
+        [[_crest(report), titles]],
+        colWidths=[1.1 * inch, LETTER[0] - 2 * _MARGIN - 1.1 * inch],
+    )
+    masthead.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]
+        )
+    )
+    masthead.hAlign = "LEFT"
+    flow: list[Flowable] = [
+        masthead,
+        HRFlowable(width="100%", thickness=1.2, color=accent, spaceAfter=8),
     ]
     facts = [
         ["Season", str(report.season)],
@@ -393,7 +505,9 @@ def _gap(item: Gap, styles: dict[str, ParagraphStyle]) -> Flowable:
     return _bullets([_rich(markup, styles["item"])], styles["item"])
 
 
-def _statistics(report: Report, styles: dict[str, ParagraphStyle]) -> list[Flowable]:
+def _statistics(
+    report: Report, styles: dict[str, ParagraphStyle], accent: colors.Color
+) -> list[Flowable]:
     if not report.stat_tables:
         return []
     flow: list[Flowable] = [
@@ -405,11 +519,13 @@ def _statistics(report: Report, styles: dict[str, ParagraphStyle]) -> list[Flowa
             styles["meta"],
         ),
     ]
-    flow += [_stat_table(table, styles) for table in report.stat_tables]
+    flow += [_stat_table(table, styles, accent) for table in report.stat_tables]
     return flow
 
 
-def _stat_table(table: StatTable, styles: dict[str, ParagraphStyle]) -> Flowable:
+def _stat_table(
+    table: StatTable, styles: dict[str, ParagraphStyle], accent: colors.Color
+) -> Flowable:
     title = table.title
     if table.dimension_value:
         title = f"{title}: {table.dimension_value}"
@@ -434,7 +550,7 @@ def _stat_table(table: StatTable, styles: dict[str, ParagraphStyle]) -> Flowable
         repeatRows=1,
     )
     style = [
-        ("BACKGROUND", (0, 0), (-1, 0), _ACCENT),
+        ("BACKGROUND", (0, 0), (-1, 0), accent),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LINEBELOW", (0, 0), (-1, -1), 0.4, _RULE),
         ("TOPPADDING", (0, 0), (-1, -1), 3),
@@ -452,13 +568,16 @@ def _stat_table(table: StatTable, styles: dict[str, ParagraphStyle]) -> Flowable
 
 def _data_used(report: Report, styles: dict[str, ParagraphStyle]) -> list[Flowable]:
     usage = report.data_used
-    figures = [
+    figures: list[tuple[str, int]] = [
         ("Games", usage.games),
-        ("Plays", usage.plays),
+        ("Play-by-play records", usage.plays),
         ("Media items", usage.media_items),
         ("Quotes", usage.quotes),
         ("Sources", len(usage.source_ids)),
     ]
+    scrimmage = analyzed_scrimmage_plays(report)
+    if scrimmage is not None:
+        figures.insert(2, ("Analyzed scrimmage plays", scrimmage))
     grid = Table(
         [
             [_p(str(value), styles["title"]) for _, value in figures],
